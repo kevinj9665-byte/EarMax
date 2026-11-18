@@ -1,0 +1,5 @@
+{
+  "name": "Earshot",
+  "description": "One companion app for your Bluetooth headset, whatever the brand — noise control, Pro EQ, sleep soundscape & alarms, and protocol diagnostics.",
+  "requestFramePermissions": ["microphone"]
+}
