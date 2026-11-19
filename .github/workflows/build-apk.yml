@@ -21,15 +21,20 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
 
-      - name: Make gradlew executable
-        run: chmod +x gradlew
+      - name: Prepare debug keystore
+        run: |
+          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          fi
 
       - name: Run unit tests
-        run: ./gradlew :protocol:test :dsp:test :app:testDebugUnitTest --console=plain
+        run: gradle :protocol:test :dsp:test :app:testDebugUnitTest --console=plain
 
       - name: Build Debug APK
-        run: ./gradlew :app:assembleDebug --console=plain
+        run: gradle :app:assembleDebug --console=plain
 
       - name: Upload Debug APK artifact
         uses: actions/upload-artifact@v4

@@ -34,28 +34,35 @@ jobs:
           java-version: "17"
 
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
 
       - name: Gradle heaps for the runner
         run: |
           mkdir -p ~/.gradle
           echo "org.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8" >> ~/.gradle/gradle.properties
           echo "kotlin.daemon.jvmargs=-Xmx4g" >> ~/.gradle/gradle.properties
-          chmod +x gradlew
+
+      - name: Prepare debug keystore
+        run: |
+          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          fi
 
       - name: Unit tests (protocol, dsp)
-        run: ./gradlew :protocol:test :dsp:test --console=plain
+        run: gradle :protocol:test :dsp:test --console=plain
 
       - name: Unit tests (app)
-        run: ./gradlew :app:testDebugUnitTest --console=plain
+        run: gradle :app:testDebugUnitTest --console=plain
 
       - name: Lint
-        run: ./gradlew :app:lintDebug --console=plain
+        run: gradle :app:lintDebug --console=plain
 
       - name: Debug build
-        run: ./gradlew :app:assembleDebug --console=plain
+        run: gradle :app:assembleDebug --console=plain
 
       - name: Release build (unsigned)
-        run: ./gradlew :app:assembleRelease --console=plain
+        run: gradle :app:assembleRelease --console=plain
 
       - name: Keep reports on failure
         if: failure()
