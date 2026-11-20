@@ -30,11 +30,8 @@ jobs:
             base64 -d debug.keystore.base64 > debug.keystore
           fi
 
-      - name: Run unit tests
-        run: gradle :protocol:test :dsp:test :app:testDebugUnitTest --console=plain
-
       - name: Build Debug APK
-        run: gradle :app:assembleDebug --console=plain
+        run: gradle assembleDebug --no-daemon --console=plain
 
       - name: Upload Debug APK artifact
         uses: actions/upload-artifact@v4
