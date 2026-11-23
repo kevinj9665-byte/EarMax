@@ -26,14 +26,41 @@ import {
 } from '../components/EarshotPrimitives';
 import { BUTTON_ACTION_LABELS, getLabProfile } from '../data/virtualDevices';
 import { sleepAudioEngine } from '../audio/sleepAudioEngine';
-import { ButtonActionId, CodecType, Sidetone } from '../types/earshot';
+import { ALL_CYCLE_MODES, canToggleCycleMode } from '../dsp/earmaxLogic';
+import { ButtonActionId, CodecType, EarbudHoldActionId, Sidetone } from '../types/earshot';
+
+const EARBUD_HOLD_OPTIONS: Array<{ id: EarbudHoldActionId; label: string }> = [
+  { id: 'CYCLE_LISTENING_MODES', label: 'Cycle Listening Modes' },
+  { id: 'IMMERSIVE_AUDIO', label: 'Immersive Audio (Off / Still / Motion)' },
+  { id: 'CYCLE_EQ', label: 'Cycle EQ Preset' },
+  { id: 'VOICE_ASSISTANT', label: 'Voice Assistant' },
+  { id: 'LAUNCH_APP', label: 'Launch an App…' },
+  { id: 'OFF', label: 'Off' },
+];
+
+const QUICK_LAUNCH_APPS = ['Spotify', 'YouTube Music', 'Pocket Casts', 'Audible', 'Google Assistant'];
+
+function resolveHoldAction(
+  explicit: { kind: EarbudHoldActionId; appName?: string } | undefined,
+  bmapAction: ButtonActionId,
+): EarbudHoldActionId {
+  if (explicit) return explicit.kind;
+  if (bmapAction === 'MODES_CAROUSEL' || bmapAction === 'ANC_CYCLE') return 'CYCLE_LISTENING_MODES';
+  if (bmapAction === 'SPATIAL_AUDIO') return 'IMMERSIVE_AUDIO';
+  if (bmapAction === 'DISABLED' || bmapAction === 'NOT_CONFIGURED') return 'OFF';
+  return 'VOICE_ASSISTANT';
+}
 
 // 1. Controls & Shortcuts Remapper
 const ControlsScreen: React.FC = () => {
   const {
     headphone,
+    btd700ModeActive,
     goBack,
-    setButtonAction,
+    earbudHoldActions,
+    setEarbudHoldAction,
+    modeCycle,
+    toggleCycleMode,
     setTouchControls,
     setAutoPlayPause,
     setAutoAnswer,
@@ -41,11 +68,20 @@ const ControlsScreen: React.FC = () => {
   } = useEarshot();
   const [detectOpen, setDetectOpen] = useState(false);
 
+  const activeModeObj = headphone.modes.find((m) => m.index === headphone.currentModeIndex);
+  const currentModeSummary = btd700ModeActive
+    ? 'BTD 700 Mode'
+    : activeModeObj?.name ?? 'Quiet';
+
+  const cycleSequenceText = ALL_CYCLE_MODES.filter((m) => modeCycle.includes(m.id))
+    .map((m) => m.shortLabel)
+    .join(' -> ');
+
   return (
     <div className="space-y-4">
       <SubScreenHeader
         title="Controls"
-        subtitle="Headset buttons, touch sensors & press detection"
+        subtitle={`${headphone.info.productName} · Tap-and-hold shortcuts & cycle`}
         onBack={goBack}
         action={
           <button
@@ -60,20 +96,29 @@ const ControlsScreen: React.FC = () => {
 
       {detectOpen && (
         <EarshotCard className="p-4 space-y-3 border-[var(--earshot-accent)]">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <LegendHeading className="text-lg">Detect headset press</LegendHeading>
-            <span className="text-xs font-mono-tabular text-[var(--earshot-muted)]">Demo press simulator</span>
+            <span className="text-xs font-mono-tabular text-[var(--earshot-muted)]">
+              Current mode: {currentModeSummary}
+            </span>
           </div>
           <p className="text-xs text-[var(--earshot-muted)]">
-            Trigger a virtual headset button press below to verify how Earshot captures media keys and programmable BMAP pushes:
+            Trigger a virtual headset button hold below to verify dual-path mode cycling, EQ switching, or media keys:
           </p>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => simulateDemoButtonPress('main')}
-              className="px-3 py-2 text-xs font-medium rounded-[var(--earshot-radius-sm)] border border-[var(--earshot-hairline)] bg-[var(--earshot-surface-low)] hover:bg-[var(--earshot-surface-high)] cursor-pointer"
+              onClick={() => simulateDemoButtonPress('right')}
+              className="px-3 py-2 text-xs font-semibold rounded-[var(--earshot-radius-sm)] bg-[var(--earshot-accent)] text-[var(--earshot-on-accent)] cursor-pointer"
             >
-              Press Shortcut Button
+              Hold Right Earbud
+            </button>
+            <button
+              type="button"
+              onClick={() => simulateDemoButtonPress('left')}
+              className="px-3 py-2 text-xs font-semibold rounded-[var(--earshot-radius-sm)] border border-[var(--earshot-hairline)] bg-[var(--earshot-surface-low)] hover:bg-[var(--earshot-surface-high)] cursor-pointer"
+            >
+              Hold Left Earbud
             </button>
             <button
               type="button"
@@ -92,10 +137,10 @@ const ControlsScreen: React.FC = () => {
           </div>
           {headphone.lastButtonPress && (
             <div className="flex items-center gap-2 text-xs font-mono-tabular text-[var(--earshot-ok)] pt-1">
-              <CheckCircle2 className="w-4 h-4" />
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
               <span>
-                Detected: {headphone.lastButtonPress.buttonLabel} ({headphone.lastButtonPress.eventLabel}) →{' '}
-                {BUTTON_ACTION_LABELS[headphone.lastButtonPress.action]}
+                Detected: {headphone.lastButtonPress.buttonLabel} ({headphone.lastButtonPress.eventLabel}) · Mode:{' '}
+                {currentModeSummary}
               </span>
             </div>
           )}
@@ -104,31 +149,131 @@ const ControlsScreen: React.FC = () => {
 
       {headphone.shortcutButtons.length > 0 && (
         <EarshotCard className="p-4 md:p-5 space-y-4">
-          <LegendHeading className="text-xl">Programmable buttons</LegendHeading>
-          {headphone.shortcutButtons.map((btn) => (
-            <div
-              key={btn.buttonId}
-              className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b last:border-b-0 last:pb-0 border-dashed border-[var(--earshot-hairline)]"
-            >
-              <div>
-                <div className="font-medium text-sm">{btn.buttonLabel}</div>
-                <div className="text-xs text-[var(--earshot-muted)]">{btn.eventLabel}</div>
-              </div>
-              <select
-                value={btn.action}
-                onChange={(e) => setButtonAction(btn.buttonId, e.target.value as ButtonActionId)}
-                className="px-3 py-2 text-sm rounded-[var(--earshot-radius-sm)] border border-[var(--earshot-hairline)] bg-[var(--earshot-surface-low)]"
-              >
-                {btn.supportedActions.map((act) => (
-                  <option key={act} value={act}>
-                    {BUTTON_ACTION_LABELS[act]}
-                  </option>
-                ))}
-              </select>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <LegendHeading className="text-xl">Programmable buttons</LegendHeading>
+              <p className="text-xs text-[var(--earshot-muted)]">
+                Each earbud can be mapped independently to any tap-and-hold action.
+              </p>
             </div>
-          ))}
+            <button
+              type="button"
+              onClick={() => simulateDemoButtonPress('right')}
+              className="px-3 py-1.5 text-xs font-medium rounded-[var(--earshot-radius-sm)] border border-[var(--earshot-hairline)] bg-[var(--earshot-surface-low)] hover:bg-[var(--earshot-surface-high)] cursor-pointer shrink-0"
+            >
+              Test Right Hold
+            </button>
+          </div>
+          {headphone.shortcutButtons.map((btn, idx) => {
+            const explicit = earbudHoldActions[btn.buttonId];
+            const selectedKind = resolveHoldAction(explicit, btn.action);
+            const isRight = btn.buttonId === 0x03 || btn.buttonLabel.toLowerCase().includes('right');
+            const isLeft = btn.buttonId === 0x04 || btn.buttonLabel.toLowerCase().includes('left');
+            const slotSubtitle = isRight
+              ? 'Shortcut Button 1 · Touch & hold'
+              : isLeft
+                ? 'Shortcut Button 2 · Touch & hold'
+                : `Shortcut Button ${idx + 1} · ${btn.eventLabel}`;
+            return (
+              <div
+                key={btn.buttonId}
+                className="space-y-2 pb-3 border-b last:border-b-0 last:pb-0 border-dashed border-[var(--earshot-hairline)]"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <div className="font-medium text-sm">{btn.buttonLabel}</div>
+                    <div className="text-xs text-[var(--earshot-muted)]">{slotSubtitle}</div>
+                  </div>
+                  <select
+                    aria-label={`${btn.buttonLabel} touch and hold action`}
+                    value={selectedKind}
+                    onChange={(e) =>
+                      setEarbudHoldAction(btn.buttonId, e.target.value as EarbudHoldActionId, explicit?.appName)
+                    }
+                    className="px-3 py-2 text-sm rounded-[var(--earshot-radius-sm)] border border-[var(--earshot-hairline)] bg-[var(--earshot-surface-low)]"
+                  >
+                    {EARBUD_HOLD_OPTIONS.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {selectedKind === 'LAUNCH_APP' && (
+                  <div className="flex items-center justify-between gap-2 pl-3 border-l-2 border-[var(--earshot-accent)]">
+                    <span className="text-xs text-[var(--earshot-muted)]">Target app to launch</span>
+                    <select
+                      aria-label={`${btn.buttonLabel} target app`}
+                      value={explicit?.appName ?? 'Spotify'}
+                      onChange={(e) => setEarbudHoldAction(btn.buttonId, 'LAUNCH_APP', e.target.value)}
+                      className="px-2.5 py-1.5 text-xs rounded-[var(--earshot-radius-sm)] border border-[var(--earshot-hairline)] bg-[var(--earshot-surface-low)]"
+                    >
+                      {QUICK_LAUNCH_APPS.map((app) => (
+                        <option key={app} value={app}>
+                          {app}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </EarshotCard>
       )}
+
+      {/* Customizable Mode Cycle Picker directly below Shortcut Button 1 & 2 selectors */}
+      <EarshotCard className="p-4 md:p-5 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <LegendHeading className="text-xl">Modes Included in Cycle</LegendHeading>
+            <p className="text-xs text-[var(--earshot-muted)]">
+              Choose at least 2 modes to rotate through when holding either earbud.
+            </p>
+          </div>
+          <span className="text-[11px] font-mono-tabular uppercase tracking-wider px-2.5 py-1 rounded-[var(--earshot-radius-sm)] bg-[var(--earshot-surface-low)] border border-[var(--earshot-hairline)] shrink-0">
+            {modeCycle.length} of {ALL_CYCLE_MODES.length} selected
+          </span>
+        </div>
+
+        <div className="space-y-1.5">
+          {ALL_CYCLE_MODES.map((opt) => {
+            const checked = modeCycle.includes(opt.id);
+            const canToggle = canToggleCycleMode(modeCycle, opt.id);
+            return (
+              <label
+                key={opt.id}
+                className={`flex items-center justify-between gap-3 p-3 rounded-[var(--earshot-radius-sm)] border cursor-pointer transition-colors ${
+                  checked
+                    ? 'bg-[var(--earshot-surface-low)] border-[var(--earshot-accent)]/60'
+                    : 'bg-[var(--earshot-surface)] border-[var(--earshot-hairline)]'
+                }`}
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    aria-label={opt.label}
+                    onChange={() => toggleCycleMode(opt.id)}
+                    className="w-4 h-4 accent-[var(--earshot-accent)] cursor-pointer shrink-0"
+                  />
+                  <span className="text-sm font-medium text-[var(--earshot-ink)]">{opt.label}</span>
+                </div>
+                {!canToggle && (
+                  <span className="text-[11px] font-mono-tabular text-[var(--earshot-muted)] shrink-0">
+                    Min 2 required
+                  </span>
+                )}
+              </label>
+            );
+          })}
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs font-mono-tabular text-[var(--earshot-muted)]">
+          <span>Cycle sequence: {cycleSequenceText}</span>
+          <span>Active now: {currentModeSummary}</span>
+        </div>
+      </EarshotCard>
 
       <EarshotCard className="p-4 md:p-5 space-y-3.5">
         <LegendHeading className="text-xl">Sensors &amp; Touch</LegendHeading>

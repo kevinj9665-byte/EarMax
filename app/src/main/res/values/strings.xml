@@ -157,7 +157,7 @@
     <string name="noise_label_aware">Aware</string>
     <string name="noise_hint_anc_off">The level has no effect while noise cancelling is off.</string>
     <string name="noise_hint_wind_on">The level has no effect while Wind Block is on.</string>
-    <string name="noise_hint_btd700_locked">Noise cancelling is locked to 10 (Quiet) and ActiveSense is off while BTD 700 Mode is active.</string>
+    <string name="noise_hint_btd700_active">BTD 700 Mode defaulted to Quiet (NC 10) &amp; ActiveSense Off — customize freely anytime.</string>
     <string name="noise_hint_mode_only">On these headphones noise settings belong to a mode. Switch to a custom mode to adjust them.</string>
     <string name="noise_hint_read_only">Shown for reference: this firmware doesn\'t let other apps change noise cancelling.</string>
     <string name="noise_anc">Noise cancelling</string>
@@ -169,7 +169,7 @@
     <string name="noise_immersive">Immersive Audio</string>
     <string name="home_btd700_title">BTD 700 Mode</string>
     <string name="home_btd700_mode">Sennheiser BTD 700 USB-C Link</string>
-    <string name="home_btd700_subtitle">Unlocks USB aptX Lossless Pro EQ &amp; Boost, locks Quiet (NC 10), and sets ActiveSense Off</string>
+    <string name="home_btd700_subtitle">Defaults to Quiet (NC 10) &amp; ActiveSense Off — customize anytime. Unlocks USB aptX Lossless Pro EQ &amp; Boost.</string>
 
     <!-- Home: now playing + status chips -->
     <string name="now_playing_title">Now playing</string>
@@ -693,11 +693,12 @@
     <string name="tools_headphone_controls">Headphone controls</string>
     <string name="tools_earbud_controls">Earbud controls</string>
     <string name="shortcut_button_1">Shortcut Button 1:</string>
-    <string name="shortcut_choice_assistant">Phone assistant</string>
-    <string name="shortcut_choice_launch">Launch an app…</string>
-    <string name="shortcut_choice_immersive">Immersive Audio (on the headphones)</string>
-    <string name="shortcut_choice_immersive_buds">Immersive Audio (on the earbuds)</string>
+    <string name="shortcut_choice_assistant">Voice Assistant</string>
+    <string name="shortcut_choice_launch">Launch an App…</string>
+    <string name="shortcut_choice_immersive">Immersive Audio (Off / Still / Motion)</string>
+    <string name="shortcut_choice_immersive_buds">Immersive Audio (Off / Still / Motion)</string>
     <string name="shortcut_choice_off">Off</string>
+    <string name="shortcut_choice_cycle_modes">Cycle Listening Modes</string>
     <string name="shortcut_first_press_hint">The first time you hold the button, Android asks which app to open: pick Earshot, then Always.</string>
     <string name="shortcut_any_headset">Any headset</string>
     <string name="shortcut_any_headset_sub">No headset connected. This choice is used by every headset that has none of its own.</string>
@@ -710,7 +711,7 @@
     <string name="shortcut_mic_needed">Voice memos need the microphone permission.</string>
     <string name="shortcut_allow_mic">Allow</string>
 
-    <string name="shortcut_action_cycle_eq">Cycle EQ preset</string>
+    <string name="shortcut_action_cycle_eq">Cycle EQ Preset</string>
     <string name="shortcut_action_voice_memo">Voice memo</string>
     <string name="shortcut_action_launch_named">Open %1$s</string>
     <string name="shortcut_pick_assistant">Choose your assistant</string>
@@ -727,14 +728,23 @@
     <string name="shortcut_no_assistant">No other assistant app found</string>
     <string name="shortcut_start_failed">Couldn\'t open it</string>
     <string name="shortcut_no_headset">No headset connected</string>
+    <string name="shortcut_cycle_no_modes">No listening modes available on the connected earbuds</string>
 
     <!-- Controls: several Bose buttons (earbuds: one per bud) -->
     <string name="shortcut_button_n">Shortcut Button %1$d:</string>
     <string name="shortcut_button_n_right">Shortcut Button %1$d (right earbud):</string>
     <string name="shortcut_button_n_left">Shortcut Button %1$d (left earbud):</string>
     <string name="shortcut_secondary_same">Same as Shortcut Button 1 (%1$s)</string>
-    <string name="shortcut_secondary_hint">The phone can\'t tell two assistant buttons apart, so this one can only share Shortcut Button 1\'s action or do something on the headset itself.</string>
-    <string name="shortcut_shared_assistant">More than one button is on the phone\'s assistant: they all run %1$s.</string>
+    <string name="shortcut_secondary_hint">Choose this earbud\'s long-press action. Hold gestures either run natively on the earbuds or route through Android.</string>
+    <string name="shortcut_shared_assistant">Both earbuds are set to run through Android\'s hold gesture: holding either triggers %1$s.</string>
+    <string name="mode_cycle_picker_title">Modes Included in Cycle</string>
+    <string name="mode_cycle_picker_subtitle">Choose at least 2 modes to rotate through when holding either earbud.</string>
+    <string name="mode_cycle_picker_min_error">Select at least 2 modes to cycle through.</string>
+    <string name="mode_cycle_quiet">Quiet (ANC 10)</string>
+    <string name="mode_cycle_aware">Aware (Transparency)</string>
+    <string name="mode_cycle_immersion">Immersion</string>
+    <string name="mode_cycle_cinema">Cinema</string>
+    <string name="mode_cycle_btd700">BTD 700 Mode</string>
 
     <!-- Controls: Detect a button -->
     <string name="shortcut_detected">Shortcut detected ✓</string>

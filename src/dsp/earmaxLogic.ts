@@ -298,11 +298,82 @@ export function applyListeningModePolicy(
   modeNoise: NoiseSettings | null,
 ): Btd700PolicyState {
   const isQuiet = modeName.trim().toLowerCase() === 'quiet' || modeIndex === 0;
-  const unlockBtd = !isQuiet && state.btd700ModeActive;
   return {
-    btd700ModeActive: unlockBtd ? false : state.btd700ModeActive,
+    btd700ModeActive: state.btd700ModeActive,
     activeSenseEnabled: isQuiet ? false : state.activeSenseEnabled,
     currentModeIndex: modeIndex,
     noise: modeNoise ? { ...modeNoise, windBlock: false } : state.noise,
   };
+}
+
+// ---- Customizable Earbud Hold Mode Cycle ----
+export type CycleModeOption = 'QUIET' | 'AWARE' | 'IMMERSION' | 'CINEMA' | 'BTD_700';
+
+export const ALL_CYCLE_MODES: { id: CycleModeOption; label: string; shortLabel: string }[] = [
+  { id: 'QUIET', label: 'Quiet (ANC 10)', shortLabel: 'Quiet' },
+  { id: 'AWARE', label: 'Aware (Transparency)', shortLabel: 'Aware' },
+  { id: 'IMMERSION', label: 'Immersion', shortLabel: 'Immersion' },
+  { id: 'CINEMA', label: 'Cinema', shortLabel: 'Cinema' },
+  { id: 'BTD_700', label: 'BTD 700 Mode', shortLabel: 'BTD 700 Mode' },
+];
+
+export const DEFAULT_CYCLE_MODES: CycleModeOption[] = ['QUIET', 'AWARE', 'BTD_700'];
+
+export function normalizeCycleModes(modes: CycleModeOption[] | undefined): CycleModeOption[] {
+  const set = new Set(modes ?? []);
+  const ordered = ALL_CYCLE_MODES.map((m) => m.id).filter((id) => set.has(id));
+  return ordered.length >= 2 ? ordered : [...DEFAULT_CYCLE_MODES];
+}
+
+export function canToggleCycleMode(current: CycleModeOption[], option: CycleModeOption): boolean {
+  const normalized = normalizeCycleModes(current);
+  return !normalized.includes(option) || normalized.length > 2;
+}
+
+export function toggleCycleModeOption(current: CycleModeOption[], option: CycleModeOption): CycleModeOption[] {
+  const normalized = normalizeCycleModes(current);
+  if (normalized.includes(option)) {
+    if (normalized.length <= 2) return normalized;
+    return normalized.filter((m) => m !== option);
+  }
+  const set = new Set([...normalized, option]);
+  return ALL_CYCLE_MODES.map((m) => m.id).filter((id) => set.has(id));
+}
+
+export function nextCycleModeOption(
+  cycle: CycleModeOption[],
+  current: CycleModeOption | null,
+): CycleModeOption {
+  const normalized = normalizeCycleModes(cycle);
+  if (!current) return normalized[0];
+  const idx = normalized.indexOf(current);
+  return idx < 0 ? normalized[0] : normalized[(idx + 1) % normalized.length];
+}
+
+export function deriveCurrentCycleModeOption(params: {
+  btd700ModeActive: boolean;
+  currentModeName?: string | null;
+  currentModeIndex?: number | null;
+  spatialAudio?: NoiseSettings['spatialAudio'] | null;
+}): CycleModeOption | null {
+  if (params.btd700ModeActive) return 'BTD_700';
+  const normalizedName = params.currentModeName?.trim().toLowerCase();
+  if (normalizedName === 'quiet') return 'QUIET';
+  if (normalizedName === 'aware') return 'AWARE';
+  if (normalizedName === 'immersion') return 'IMMERSION';
+  if (normalizedName === 'cinema') return 'CINEMA';
+  if (params.spatialAudio === 'HEAD') return 'IMMERSION';
+  if (params.spatialAudio === 'ROOM') return 'CINEMA';
+  switch (params.currentModeIndex) {
+    case 0:
+      return 'QUIET';
+    case 1:
+      return 'AWARE';
+    case 2:
+      return 'IMMERSION';
+    case 3:
+      return 'CINEMA';
+    default:
+      return null;
+  }
 }

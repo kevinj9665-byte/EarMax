@@ -10,10 +10,13 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import dev.earshot.MainActivity
 import dev.earshot.R
+import dev.earshot.audio.EarbudStateCoordinator
 import dev.earshot.bt.DevicePrefs
 import dev.earshot.core.AudioTuningRepository
 import dev.earshot.core.HeadphoneCommandException
 import dev.earshot.core.HeadphoneRepository
+import dev.earshot.core.NoiseSettings
+import dev.earshot.core.SpatialAudio
 import dev.earshot.dsp.EqPreset
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
@@ -35,9 +38,10 @@ class ShortcutEngine(
     private val context: Context,
     val prefs: ShortcutPrefs,
     private val tuning: AudioTuningRepository,
-    headphones: HeadphoneRepository,
+    private val headphones: HeadphoneRepository,
     private val devicePrefs: DevicePrefs,
     private val scope: CoroutineScope,
+    private val earbudState: EarbudStateCoordinator? = null,
 ) {
     val assistants = AssistantDirectory(context)
     val headsets = HeadsetLookup(context)
@@ -129,6 +133,19 @@ class ShortcutEngine(
     ) {
         Log.i(TAG, "running ${action.javaClass.simpleName}")
         when (action) {
+            ShortcutAction.CycleModes -> {
+                acknowledgeIfConfigured(headsetAddress)
+                scope.launch {
+                    try {
+                        val activeLabel = cycleListeningModes(settings)
+                        feedback.confirm(activeLabel, settings.spokenFeedback)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "cycle listening modes failed: $e")
+                        feedback.toast(e.message ?: context.getString(R.string.error_generic))
+                    }
+                }
+                onDone()
+            }
             ShortcutAction.CycleEq -> {
                 acknowledgeIfConfigured(headsetAddress)
                 scope.launch {
@@ -170,6 +187,60 @@ class ShortcutEngine(
                 onDone()
             }
         }
+    }
+
+    /**
+     * Rotates to the next checked mode in the user's [ShortcutSettings.modeCycle] list (including
+     * toggling BTD 700 Mode on/off) and applies it to the connected earbuds.
+     */
+    suspend fun cycleListeningModes(settings: ShortcutSettings? = null): String {
+        val activeSettings = settings ?: prefs.current()
+        val hp = headphones.state.value
+        val btdActive = earbudState?.btd700ModeActive?.value == true
+        val cycle = ModeCyclePolicy.normalize(activeSettings.modeCycle)
+        val current = ModeCyclePolicy.currentOption(hp, btdActive)
+        var candidate = ModeCyclePolicy.nextOption(cycle, current)
+
+        // If cycling to a Bose mode slot when earbuds have no slot (e.g. disconnected non-BTD), skip unavailable slots cleanly.
+        if (candidate != CycleModeOption.BTD_700 && !hp.isConnected && earbudState == null) {
+            throw HeadphoneCommandException(context.getString(R.string.shortcut_no_headset))
+        }
+        if (candidate != CycleModeOption.BTD_700 && hp.isConnected) {
+            val idx = ModeCyclePolicy.resolveSlotIndex(candidate, hp.modes)
+            if (idx == null && candidate != CycleModeOption.IMMERSION && candidate != CycleModeOption.CINEMA) {
+                val alternate = cycle.firstOrNull { it == CycleModeOption.BTD_700 || ModeCyclePolicy.resolveSlotIndex(it, hp.modes) != null }
+                if (alternate != null) candidate = alternate
+            }
+        }
+
+        if (candidate == CycleModeOption.BTD_700) {
+            earbudState?.setBtd700ModeEnabled(true)
+            return candidate.defaultLabel
+        }
+
+        if (btdActive) {
+            earbudState.setBtd700ModeEnabled(false)
+        }
+        val currentHp = headphones.state.value
+        if (!currentHp.isConnected) throw HeadphoneCommandException(context.getString(R.string.shortcut_no_headset))
+
+        val slot = ModeCyclePolicy.resolveSlotIndex(candidate, currentHp.modes)
+        if (slot != null) {
+            headphones.setMode(slot)
+            earbudState?.recordModeSelection(slot)
+        } else if (candidate == CycleModeOption.IMMERSION || candidate == CycleModeOption.CINEMA) {
+            val base = currentHp.noise ?: NoiseSettings(cancellingLevel = 10, ancEnabled = true)
+            val updated = base.copy(
+                cancellingLevel = 10,
+                ancEnabled = true,
+                spatialAudio = if (candidate == CycleModeOption.IMMERSION) SpatialAudio.HEAD else SpatialAudio.ROOM,
+            )
+            headphones.setNoise(updated)
+            earbudState?.recordNoiseChange(updated)
+        } else {
+            throw HeadphoneCommandException(context.getString(R.string.shortcut_cycle_no_modes))
+        }
+        return candidate.defaultLabel
     }
 
     /**

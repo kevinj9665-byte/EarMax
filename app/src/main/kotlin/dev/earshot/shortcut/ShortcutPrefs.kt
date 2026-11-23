@@ -50,6 +50,8 @@ class ShortcutPrefs(context: Context) {
             p[SEEN_HEADSET_PRESS] = after.seenHeadsetPress
             p[DETECTED] = ShortcutExtrasCodec.encodeDetected(after.detected)
             p[BUTTON_CHOICES] = ShortcutExtrasCodec.encodeButtonChoices(after.buttonChoices)
+            p[BUTTON_ACTIONS] = ShortcutExtrasCodec.encodeButtonActions(after.buttonActions)
+            p[MODE_CYCLE] = ShortcutExtrasCodec.encodeModeCycle(after.modeCycle)
         }
     }
 
@@ -62,7 +64,16 @@ class ShortcutPrefs(context: Context) {
     }
 
     private fun decode(p: Preferences): ShortcutSettings =
-        ShortcutCodec.decodeSettings(p[DEFAULT_ACTION], p[OVERRIDES], p[SPOKEN_FEEDBACK], p[SEEN_HEADSET_PRESS], p[DETECTED], p[BUTTON_CHOICES])
+        ShortcutCodec.decodeSettings(
+            defaultAction = p[DEFAULT_ACTION],
+            overrides = p[OVERRIDES],
+            spokenFeedback = p[SPOKEN_FEEDBACK],
+            seenHeadsetPress = p[SEEN_HEADSET_PRESS],
+            detected = p[DETECTED],
+            buttonChoices = p[BUTTON_CHOICES],
+            buttonActions = p[BUTTON_ACTIONS],
+            modeCycle = p[MODE_CYCLE],
+        )
 
     private companion object {
         const val TAG = "Earshot/Shortcut"
@@ -72,5 +83,7 @@ class ShortcutPrefs(context: Context) {
         val SEEN_HEADSET_PRESS = booleanPreferencesKey("seen_headset_press")
         val DETECTED = stringPreferencesKey("detected_shortcuts")
         val BUTTON_CHOICES = stringPreferencesKey("button_choices")
+        val BUTTON_ACTIONS = stringPreferencesKey("button_actions")
+        val MODE_CYCLE = stringPreferencesKey("mode_cycle")
     }
 }

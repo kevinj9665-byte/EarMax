@@ -39,6 +39,14 @@ class SpokenFeedback(context: Context) {
         }
     }
 
+    /** Speaks [text] when [speak] is true AND shows a brief toast confirmation. */
+    fun confirm(text: String, speak: Boolean) {
+        if (speak) {
+            say(text, speak = true)
+        }
+        toast(text)
+    }
+
     fun toast(text: String) {
         main.post { Toast.makeText(appContext, text, Toast.LENGTH_SHORT).show() }
     }

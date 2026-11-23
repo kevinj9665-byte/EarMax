@@ -224,7 +224,7 @@ export const SubScreenHeader: React.FC<{
   action?: React.ReactNode;
 }> = ({ title, subtitle, onBack, action }) => {
   return (
-    <div className="flex items-center justify-between gap-4 pb-3 border-b border-[var(--earshot-hairline)] mb-4">
+    <div className="relative z-10 flex items-center justify-between gap-4 pb-3 border-b border-[var(--earshot-hairline)] bg-[var(--earshot-bg)] mb-4">
       <div className="flex items-center gap-3 min-w-0">
         <button
           type="button"

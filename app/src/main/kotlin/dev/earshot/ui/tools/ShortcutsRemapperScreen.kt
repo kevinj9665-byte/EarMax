@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.filled.Earbuds
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -50,11 +52,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -66,6 +70,7 @@ import dev.earshot.core.ButtonAssignment
 import dev.earshot.core.HeadphoneState
 import dev.earshot.core.fake.FakeHeadphoneRepository
 import dev.earshot.shortcut.AssistantCandidate
+import dev.earshot.shortcut.CycleModeOption
 import dev.earshot.shortcut.DetectHintInput
 import dev.earshot.shortcut.DetectHints
 import dev.earshot.shortcut.DetectionSession
@@ -96,6 +101,8 @@ data class ShortcutsCallbacks(
     val onBack: () -> Unit = {},
     val onChoose: (ShortcutAction) -> Unit = {},
     val onChooseSecondary: (buttonId: Int, mode: ButtonAction) -> Unit = { _, _ -> },
+    val onChooseSecondaryAction: (buttonId: Int, action: ShortcutAction) -> Unit = { _, _ -> },
+    val onToggleCycleMode: (CycleModeOption) -> Unit = {},
     val onSpokenFeedback: (Boolean) -> Unit = {},
     val onGrantMic: () -> Unit = {},
     val onOpenDevices: () -> Unit = {},
@@ -141,6 +148,8 @@ fun ShortcutsRemapperScreen(onBack: () -> Unit, onOpenDevices: () -> Unit = {}) 
                 if (action == ShortcutAction.VoiceMemo && !micGranted) micLauncher.launch(Permissions.RECORD_AUDIO)
             },
             onChooseSecondary = vm::chooseSecondary,
+            onChooseSecondaryAction = vm::chooseSecondaryAction,
+            onToggleCycleMode = vm::toggleCycleMode,
             onSpokenFeedback = vm::setSpokenFeedback,
             onGrantMic = { micLauncher.launch(Permissions.RECORD_AUDIO) },
             onOpenDevices = onOpenDevices,
@@ -176,7 +185,9 @@ fun ShortcutsRemapperContent(
     demo: Boolean = false,
 ) {
     var pickingApp by remember { mutableStateOf(false) }
+    var appTargetButtonId by remember { mutableStateOf<Int?>(null) }
     var pickingAssistant by remember { mutableStateOf(false) }
+    var assistantTargetButtonId by remember { mutableStateOf<Int?>(null) }
     var detecting by rememberSaveable { mutableStateOf(false) }
     var highlight by remember { mutableStateOf<ControlsHighlight?>(null) }
     val shortcutRequester = remember { BringIntoViewRequester() }
@@ -199,7 +210,12 @@ fun ShortcutsRemapperContent(
 
     SubScreenScaffold(title = stringResource(R.string.tools_shortcuts), onBack = callbacks.onBack) { padding ->
         Column(
-            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(padding).padding(horizontal = 16.dp, vertical = 8.dp),
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .clipToBounds()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             HeadsetHeader(state.headset)
@@ -212,15 +228,19 @@ fun ShortcutsRemapperContent(
                 ButtonTitle(state.buttons.firstOrNull(), index = 1, detected = detectedSummary(state.detected))
                 ChoiceDropdown(
                     selected = choice.choice(),
-                    options = ShortcutChoice.options(state.nativeModes, choice.choice()),
+                    options = ShortcutChoice.options(state.nativeModes, choice.choice(), earbuds = earbuds),
                     earbuds = earbuds,
                     onSelect = { picked ->
                         when (picked) {
+                            ShortcutChoice.CYCLE_LISTENING_MODES -> callbacks.onChoose(ShortcutAction.CycleModes)
                             ShortcutChoice.PHONE_ASSISTANT -> callbacks.onChoose(choice as? ShortcutAction.OpenAssistant ?: ShortcutAction.OpenAssistant())
                             ShortcutChoice.CYCLE_EQ -> callbacks.onChoose(ShortcutAction.CycleEq)
                             ShortcutChoice.VOICE_MEMO -> callbacks.onChoose(ShortcutAction.VoiceMemo)
                             // Nothing is saved until an app is picked: cancelling keeps the old choice.
-                            ShortcutChoice.LAUNCH_APP -> if ((choice as? ShortcutAction.LaunchApp)?.packageName == null) pickingApp = true
+                            ShortcutChoice.LAUNCH_APP -> {
+                                appTargetButtonId = null
+                                pickingApp = true
+                            }
                             ShortcutChoice.IMMERSIVE_AUDIO -> callbacks.onChoose(ShortcutAction.HeadphoneButton(ButtonAction.SPATIAL_AUDIO.storedId))
                             ShortcutChoice.OFF -> callbacks.onChoose(ShortcutAction.HeadphoneButton(ButtonAction.DISABLED.storedId))
                         }
@@ -236,8 +256,14 @@ fun ShortcutsRemapperContent(
                 }
 
                 when (choice) {
-                    is ShortcutAction.LaunchApp -> AppRow(choice, onChange = { pickingApp = true })
-                    is ShortcutAction.OpenAssistant -> AssistantRow(assistantLabel(choice, state.autoAssistant), onClick = { pickingAssistant = true })
+                    is ShortcutAction.LaunchApp -> AppRow(choice, onChange = {
+                        appTargetButtonId = null
+                        pickingApp = true
+                    })
+                    is ShortcutAction.OpenAssistant -> AssistantRow(assistantLabel(choice, state.autoAssistant), onClick = {
+                        assistantTargetButtonId = null
+                        pickingAssistant = true
+                    })
                     ShortcutAction.VoiceMemo -> if (!micGranted) {
                         InfoBanner(
                             stringResource(R.string.shortcut_mic_needed),
@@ -250,7 +276,14 @@ fun ShortcutsRemapperContent(
                     else -> Unit
                 }
 
-                if (choice == ShortcutAction.CycleEq || choice == ShortcutAction.VoiceMemo) {
+                val hasAnnouncedAction = choice == ShortcutAction.CycleModes ||
+                    choice == ShortcutAction.CycleEq ||
+                    choice == ShortcutAction.VoiceMemo ||
+                    state.secondaryButtons.any { btn ->
+                        val a = state.secondaryAction(btn)
+                        a == ShortcutAction.CycleModes || a == ShortcutAction.CycleEq || a == ShortcutAction.VoiceMemo
+                    }
+                if (hasAnnouncedAction) {
                     HorizontalDivider(Modifier.padding(top = 12.dp))
                     SwitchRow(
                         title = stringResource(if (earbuds) R.string.shortcut_announce_buds else R.string.shortcut_announce),
@@ -271,18 +304,32 @@ fun ShortcutsRemapperContent(
             }
 
             state.secondaryButtons.forEachIndexed { i, button ->
+                val secondaryAction = state.secondaryAction(button)
                 SecondaryButtonCard(
                     button = button,
                     index = i + 2,
-                    selected = SecondaryButtonPolicy.displayed(state.settings.buttonChoiceFor(state.headset?.address, button.buttonId), button),
-                    sharedLabel = sharedActionLabel(choice, earbuds),
+                    selectedAction = secondaryAction,
                     earbuds = earbuds,
-                    onSelect = { mode -> callbacks.onChooseSecondary(button.buttonId, mode) },
+                    autoAssistant = state.autoAssistant,
+                    onSelectAction = { action -> callbacks.onChooseSecondaryAction(button.buttonId, action) },
+                    onPickApp = {
+                        appTargetButtonId = button.buttonId
+                        pickingApp = true
+                    },
+                    onPickAssistant = {
+                        assistantTargetButtonId = button.buttonId
+                        pickingAssistant = true
+                    },
                 )
             }
             if (state.sharesAssistant) {
                 InfoBanner(stringResource(R.string.shortcut_shared_assistant, sharedActionLabel(choice, earbuds)), tone = BannerTone.INFO)
             }
+
+            ModeCyclePickerCard(
+                selected = state.modeCycle,
+                onToggle = callbacks.onToggleCycleMode,
+            )
 
             HeadphoneControlsSection(
                 headphones, controls, callbacks.onOpenDevices,
@@ -332,20 +379,79 @@ fun ShortcutsRemapperContent(
     }
     if (pickingApp) {
         // Loads the list itself, with a spinner meanwhile (it used to show the typing form until then).
+        val targetId = appTargetButtonId
         AppPickerDialog(
-            onPick = { label, pkg -> pickingApp = false; callbacks.onChoose(ShortcutAction.LaunchApp(pkg, label)) },
+            onPick = { label, pkg ->
+                pickingApp = false
+                val action = ShortcutAction.LaunchApp(pkg, label)
+                if (targetId == null) callbacks.onChoose(action) else callbacks.onChooseSecondaryAction(targetId, action)
+            },
             onDismiss = { pickingApp = false },
         )
     }
     if (pickingAssistant) {
+        val targetId = assistantTargetButtonId
+        val targetButton = targetId?.let { id -> state.buttons.firstOrNull { it.buttonId == id } }
+        val currentComponent = if (targetButton != null) {
+            (state.secondaryAction(targetButton) as? ShortcutAction.OpenAssistant)?.component
+        } else {
+            (choice as? ShortcutAction.OpenAssistant)?.component
+        }
         AssistantDialog(
-            current = (choice as? ShortcutAction.OpenAssistant)?.component,
+            current = currentComponent,
             assistants = state.assistants,
             autoAssistant = state.autoAssistant,
-            onPick = { c -> pickingAssistant = false; callbacks.onChoose(ShortcutAction.OpenAssistant(c?.component, c?.label)) },
+            onPick = { c ->
+                pickingAssistant = false
+                val action = ShortcutAction.OpenAssistant(c?.component, c?.label)
+                if (targetId == null) callbacks.onChoose(action) else callbacks.onChooseSecondaryAction(targetId, action)
+            },
             onDismiss = { pickingAssistant = false },
         )
     }
+}
+
+@Composable
+private fun ModeCyclePickerCard(
+    selected: List<CycleModeOption>,
+    onToggle: (CycleModeOption) -> Unit,
+) {
+    SectionCard {
+        Text(
+            stringResource(R.string.mode_cycle_picker_title),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(bottom = 4.dp),
+        )
+        Text(
+            stringResource(R.string.mode_cycle_picker_subtitle),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+        CycleModeOption.entries.forEach { option ->
+            val checked = option in selected
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = 44.dp)
+                    .toggleable(value = checked, role = Role.Checkbox, onValueChange = { onToggle(option) })
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(checked = checked, onCheckedChange = null)
+                Spacer(Modifier.width(12.dp))
+                Text(stringResource(cycleOptionLabelRes(option)), style = MaterialTheme.typography.bodyLarge)
+            }
+        }
+    }
+}
+
+private fun cycleOptionLabelRes(option: CycleModeOption): Int = when (option) {
+    CycleModeOption.QUIET -> R.string.mode_cycle_quiet
+    CycleModeOption.AWARE -> R.string.mode_cycle_aware
+    CycleModeOption.IMMERSION -> R.string.mode_cycle_immersion
+    CycleModeOption.CINEMA -> R.string.mode_cycle_cinema
+    CycleModeOption.BTD_700 -> R.string.mode_cycle_btd700
 }
 
 /** An accent outline while [on]: where "Use for Shortcut Button 1" / "Show Touch controls" lead. [shape] is the card's. */
@@ -468,7 +574,7 @@ private fun AssistantRow(label: String, onClick: () -> Unit) {
 
 /** The launcher icon of [packageName], loaded off the main thread; null while loading or when missing. */
 @Composable
-private fun rememberAppIcon(packageName: String?): ImageBitmap? {
+internal fun rememberAppIcon(packageName: String?): ImageBitmap? {
     val context = LocalContext.current
     val icon by produceState<ImageBitmap?>(initialValue = null, packageName) {
         value = packageName?.let { pkg ->

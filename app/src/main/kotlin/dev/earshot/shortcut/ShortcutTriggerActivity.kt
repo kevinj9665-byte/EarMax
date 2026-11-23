@@ -64,11 +64,16 @@ class ShortcutTriggerActivity : ComponentActivity() {
             if (headsetPress && !settings.seenHeadsetPress) engine.markHeadsetPressSeen()
             // Resolving costs a profile-proxy round trip; "Open my assistant" must reach the
             // assistant inside Android's 5 s, so only look when the answer can matter.
-            val needsHeadset = !wired && (settings.overrides.isNotEmpty() || settings.defaultAction == ShortcutAction.VoiceMemo ||
-                HfpVoiceRecognition.ACKNOWLEDGE_VOICE_REQUEST)
-            val headset = if (needsHeadset) runCatching { engine.headsets.resolve(trigger, engine.savedAddress()) }.getOrNull() else null
+            val hasCustomRouting = settings.overrides.isNotEmpty() || settings.buttonActions.isNotEmpty()
+            val needsHeadset = (!wired && (hasCustomRouting || settings.defaultAction == ShortcutAction.VoiceMemo ||
+                HfpVoiceRecognition.ACKNOWLEDGE_VOICE_REQUEST)) || (wired && hasCustomRouting)
+            val headset = when {
+                !needsHeadset -> null
+                wired -> engine.savedAddress()?.let { ResolvedHeadset(it, HeadsetSource.SAVED) }
+                else -> runCatching { engine.headsets.resolve(trigger, engine.savedAddress()) }.getOrNull()
+            }
             Log.i(TAG, "headset ${headset?.address ?: "unknown"} via ${headset?.source ?: if (wired) "wired" else "-"}")
-            val action = settings.actionFor(headset?.address)
+            val action = settings.triggerActionFor(headset?.address)
             if (action == ShortcutAction.VoiceMemo && VoiceMemoService.state.value == VoiceMemoService.MemoState.IDLE) {
                 // The aliases are exported, so another app could start this one and have Earshot
                 // record with its microphone grant. A press reaches us from Android's Bluetooth

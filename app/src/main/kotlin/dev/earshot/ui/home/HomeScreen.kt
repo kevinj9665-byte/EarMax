@@ -287,8 +287,8 @@ private fun ConnectedControls(
             capabilities = caps,
             activeSense = if (caps.activeSense) state.activeSenseEnabled else null,
             onActiveSenseChange = if (caps.activeSense) onActiveSenseChange else null,
-            activeSenseEnabled = controlsEnabled && btd700Mode != true,
-            btd700Locked = buds && btd700Mode == true,
+            activeSenseEnabled = controlsEnabled,
+            btd700Active = buds && btd700Mode == true,
         )
         if (!adjustable) {
             Text(

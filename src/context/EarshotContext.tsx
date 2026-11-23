@@ -9,6 +9,8 @@ import {
   CodecState,
   CodecType,
   CustomSound,
+  EarbudHoldActionConfig,
+  EarbudHoldActionId,
   EqBandMode,
   EqPreset,
   HeadphoneState,
@@ -31,12 +33,19 @@ import {
 } from '../types/earshot';
 import { BUILT_IN_PRESETS, makeGraphicBands } from '../dsp/presets';
 import {
+  ALL_CYCLE_MODES,
   applyBtd700ModeTransition,
   applyListeningModePolicy,
+  canToggleCycleMode,
+  CycleModeOption,
+  deriveCurrentCycleModeOption,
   detectExternalAudioRoute,
   EQ_BAND_MODE_CONFIGS,
   ExternalRouteResolution,
   makeModeBands,
+  nextCycleModeOption,
+  normalizeCycleModes,
+  toggleCycleModeOption,
 } from '../dsp/earmaxLogic';
 import { buildDemoDeviceState, runMockLabScan } from '../data/virtualDevices';
 import { sleepAudioEngine } from '../audio/sleepAudioEngine';
@@ -82,6 +91,8 @@ interface EarshotStorageSnapshot {
   codecState: CodecState;
   callAudio: CallAudioState;
   automations: AutomationRule[];
+  modeCycle: CycleModeOption[];
+  earbudHoldActions: Record<number, EarbudHoldActionConfig>;
 }
 
 const STORAGE_KEY = 'earshot_web_state_v2';
@@ -266,7 +277,12 @@ interface EarshotContextValue {
   setLeAudioEnabled: (v: boolean) => void;
   switchActivePairedDevice: (address: string) => void;
   setButtonAction: (buttonId: number, action: ButtonActionId) => void;
-  simulateDemoButtonPress: (kind: 'play_pause' | 'vol_up' | 'vol_down' | 'main') => void;
+  modeCycle: CycleModeOption[];
+  toggleCycleMode: (option: CycleModeOption) => void;
+  cycleListeningModes: () => void;
+  earbudHoldActions: Record<number, EarbudHoldActionConfig>;
+  setEarbudHoldAction: (buttonId: number, action: EarbudHoldActionId, appName?: string) => void;
+  simulateDemoButtonPress: (kind: 'play_pause' | 'vol_up' | 'vol_down' | 'main' | 'left' | 'right') => void;
   answerPairing: (accept: boolean) => void;
 
   // Sound / Pro EQ
@@ -380,6 +396,12 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [activeSenseEnabled, setActiveSenseEnabled] = useState<boolean>(initial.activeSenseEnabled ?? false);
   const [selectedAudioRoute, setSelectedAudioRoute] = useState<AudioOutputRoute>(
     initial.selectedAudioRoute ?? 'BLUETOOTH_A2DP',
+  );
+  const [modeCycle, setModeCycle] = useState<CycleModeOption[]>(() =>
+    normalizeCycleModes(initial.modeCycle),
+  );
+  const [earbudHoldActions, setEarbudHoldActions] = useState<Record<number, EarbudHoldActionConfig>>(
+    () => initial.earbudHoldActions ?? {},
   );
 
   const [headphone, setHeadphone] = useState<HeadphoneState>(() => {
@@ -521,6 +543,8 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
         codecState,
         callAudio,
         automations,
+        modeCycle,
+        earbudHoldActions,
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(snap));
     } catch {
@@ -546,6 +570,8 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
     codecState,
     callAudio,
     automations,
+    modeCycle,
+    earbudHoldActions,
   ]);
 
   // Sync live EQ audio engine whenever tuning changes
@@ -813,13 +839,15 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
       pushTimeline(
         headphone.info.customName,
         enabled ? 'BTD 700 Mode engaged' : 'BTD 700 Mode released',
-        enabled ? 'USB lossless DSP unlocked · Quiet ANC locked to 10 · ActiveSense OFF' : 'Noise Cancelling slider unlocked',
+        enabled
+          ? 'USB-C aptX Lossless Pro EQ unlocked · Defaulted to Quiet (NC 10) & ActiveSense Off — customize freely anytime.'
+          : 'Returned from BTD 700 Mode',
         'ok',
       );
       showToast(
         enabled
-          ? 'BTD 700 Mode ON — Quiet ANC locked & ActiveSense OFF'
-          : 'BTD 700 Mode OFF — NC slider unlocked',
+          ? 'BTD 700 Mode ON — Defaulted to Quiet (NC 10) & ActiveSense Off — customize freely anytime'
+          : 'BTD 700 Mode OFF',
       );
     },
     [headphone.info.customName, pushTimeline, showToast],
@@ -827,10 +855,6 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const setActiveSense = useCallback(
     (enabled: boolean) => {
-      if (btd700ModeActive && enabled) {
-        showToast('ActiveSense stays OFF while BTD 700 Mode is active');
-        return;
-      }
       setActiveSenseEnabled(enabled);
       setHeadphone((hp) => ({
         ...hp,
@@ -839,7 +863,7 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }));
       showToast(enabled ? 'ActiveSense ON' : 'ActiveSense OFF');
     },
-    [btd700ModeActive, showToast],
+    [showToast],
   );
 
   const toggleModeFavorite = useCallback(
@@ -895,7 +919,6 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const next: NoiseSettings = {
           ...hp.noise,
           ...patch,
-          ...(btd700ModeActive ? { cancellingLevel: 10, ancEnabled: true } : {}),
         };
         return {
           ...hp,
@@ -905,7 +928,7 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
         };
       });
     },
-    [btd700ModeActive],
+    [],
   );
 
   const togglePlayback = useCallback(() => {
@@ -1028,47 +1051,226 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [showToast],
   );
 
+  const toggleCycleMode = useCallback(
+    (option: CycleModeOption) => {
+      if (!canToggleCycleMode(modeCycle, option)) {
+        showToast('Select at least 2 modes to cycle through.');
+        return;
+      }
+      setModeCycle((curr) => toggleCycleModeOption(curr, option));
+    },
+    [modeCycle, showToast],
+  );
+
+  const cycleListeningModes = useCallback(() => {
+    const activeModeName = headphone.modes.find((m) => m.index === headphone.currentModeIndex)?.name ?? null;
+    const currentOpt = deriveCurrentCycleModeOption({
+      btd700ModeActive,
+      currentModeName: activeModeName,
+      currentModeIndex: headphone.currentModeIndex,
+      spatialAudio: headphone.noise?.spatialAudio ?? null,
+    });
+    const nextOpt = nextCycleModeOption(modeCycle, currentOpt);
+    const meta = ALL_CYCLE_MODES.find((m) => m.id === nextOpt);
+
+    if (nextOpt === 'BTD_700') {
+      setBtd700Mode(true);
+      showToast('Listening mode: BTD 700 Mode');
+      return;
+    }
+
+    if (btd700ModeActive) {
+      setBtd700ModeActive(false);
+    }
+
+    const targetNameMap: Record<Exclude<CycleModeOption, 'BTD_700'>, string> = {
+      QUIET: 'quiet',
+      AWARE: 'aware',
+      IMMERSION: 'immersion',
+      CINEMA: 'cinema',
+    };
+    const targetName = targetNameMap[nextOpt];
+    const matched = headphone.modes.find((m) => m.name.trim().toLowerCase() === targetName);
+    if (matched) {
+      const updated = applyListeningModePolicy(
+        {
+          btd700ModeActive: false,
+          activeSenseEnabled: headphone.activeSenseEnabled ?? false,
+          currentModeIndex: headphone.currentModeIndex,
+          noise: headphone.noise,
+        },
+        matched.index,
+        matched.name,
+        matched.settings,
+      );
+      setActiveSenseEnabled(updated.activeSenseEnabled);
+      setHeadphone((hp) => ({
+        ...hp,
+        currentModeIndex: updated.currentModeIndex,
+        noise: updated.noise,
+        activeSenseEnabled: updated.activeSenseEnabled,
+        lastUpdatedMillis: Date.now(),
+      }));
+    } else {
+      const fallbackNoise: NoiseSettings = {
+        cancellingLevel: nextOpt === 'AWARE' ? 0 : 10,
+        ancEnabled: true,
+        windBlock: false,
+        spatialAudio: nextOpt === 'IMMERSION' ? 'HEAD' : nextOpt === 'CINEMA' ? 'ROOM' : 'OFF',
+      };
+      setHeadphone((hp) => ({
+        ...hp,
+        noise: fallbackNoise,
+        lastUpdatedMillis: Date.now(),
+      }));
+    }
+    pushTimeline(headphone.info.customName, 'Mode cycle', `Switched to ${meta?.shortLabel ?? nextOpt}`, 'ok');
+    showToast(`Listening mode: ${meta?.shortLabel ?? nextOpt}`);
+  }, [
+    btd700ModeActive,
+    headphone.activeSenseEnabled,
+    headphone.currentModeIndex,
+    headphone.info.customName,
+    headphone.modes,
+    headphone.noise,
+    modeCycle,
+    pushTimeline,
+    setBtd700Mode,
+    showToast,
+  ]);
+
+  const setEarbudHoldAction = useCallback(
+    (buttonId: number, action: EarbudHoldActionId, appName?: string) => {
+      setEarbudHoldActions((prev) => ({
+        ...prev,
+        [buttonId]: {
+          kind: action,
+          ...(action === 'LAUNCH_APP' ? { appName: appName ?? prev[buttonId]?.appName ?? 'Spotify' } : {}),
+        },
+      }));
+      const mappedBmap: ButtonActionId =
+        action === 'CYCLE_LISTENING_MODES'
+          ? 'MODES_CAROUSEL'
+          : action === 'IMMERSIVE_AUDIO'
+            ? 'SPATIAL_AUDIO'
+            : action === 'OFF'
+              ? 'DISABLED'
+              : 'VOICE_ASSISTANT';
+      setHeadphone((hp) => ({
+        ...hp,
+        shortcutButtons: hp.shortcutButtons.map((b) =>
+          b.buttonId === buttonId ? { ...b, action: mappedBmap } : b,
+        ),
+        lastUpdatedMillis: Date.now(),
+      }));
+      const labels: Record<EarbudHoldActionId, string> = {
+        CYCLE_LISTENING_MODES: 'Cycle Listening Modes',
+        IMMERSIVE_AUDIO: 'Immersive Audio',
+        CYCLE_EQ: 'Cycle EQ Preset',
+        VOICE_ASSISTANT: 'Voice Assistant',
+        LAUNCH_APP: `Launch ${appName ?? 'App'}`,
+        OFF: 'Off',
+      };
+      showToast(`Shortcut updated: ${labels[action]}`);
+    },
+    [showToast],
+  );
+
   const simulateDemoButtonPress = useCallback(
-    (kind: 'play_pause' | 'vol_up' | 'vol_down' | 'main') => {
-      setHeadphone((hp) => {
-        if (kind === 'play_pause') {
-          return {
-            ...hp,
-            playbackState: hp.playbackState === 'PLAYING' ? 'PAUSED' : 'PLAYING',
-            lastButtonPress: {
-              buttonLabel: 'Multifunction / Touch',
-              eventLabel: 'Single tap',
-              action: 'PLAY_PAUSE',
-              atMillis: Date.now(),
-            },
-          };
-        }
-        if (kind === 'vol_up' || kind === 'vol_down') {
-          const delta = kind === 'vol_up' ? 2 : -2;
-          return {
-            ...hp,
-            volume: Math.max(0, Math.min(hp.volumeMax, hp.volume + delta)),
-            lastButtonPress: {
-              buttonLabel: 'Touch strip',
-              eventLabel: kind === 'vol_up' ? 'Swipe up' : 'Swipe down',
-              action: 'NOT_CONFIGURED',
-              atMillis: Date.now(),
-            },
-          };
-        }
-        const primary = hp.shortcutButtons[0];
-        return {
+    (kind: 'play_pause' | 'vol_up' | 'vol_down' | 'main' | 'left' | 'right') => {
+      if (kind === 'play_pause') {
+        setHeadphone((hp) => ({
           ...hp,
+          playbackState: hp.playbackState === 'PLAYING' ? 'PAUSED' : 'PLAYING',
           lastButtonPress: {
-            buttonLabel: primary?.buttonLabel ?? 'Shortcut Button 1',
-            eventLabel: primary?.eventLabel ?? 'Long press',
-            action: primary?.action ?? 'MODES_CAROUSEL',
+            buttonLabel: 'Multifunction / Touch',
+            eventLabel: 'Single tap',
+            action: 'PLAY_PAUSE',
             atMillis: Date.now(),
           },
-        };
-      });
+        }));
+        return;
+      }
+      if (kind === 'vol_up' || kind === 'vol_down') {
+        const delta = kind === 'vol_up' ? 2 : -2;
+        setHeadphone((hp) => ({
+          ...hp,
+          volume: Math.max(0, Math.min(hp.volumeMax, hp.volume + delta)),
+          lastButtonPress: {
+            buttonLabel: 'Touch strip',
+            eventLabel: kind === 'vol_up' ? 'Swipe up' : 'Swipe down',
+            action: 'NOT_CONFIGURED',
+            atMillis: Date.now(),
+          },
+        }));
+        return;
+      }
+
+      const targetBtn =
+        kind === 'left'
+          ? headphone.shortcutButtons.find((b) => b.buttonId === 0x04) ?? headphone.shortcutButtons[1]
+          : kind === 'right'
+            ? headphone.shortcutButtons.find((b) => b.buttonId === 0x03) ?? headphone.shortcutButtons[0]
+            : headphone.shortcutButtons[0];
+
+      const btnId = targetBtn?.buttonId ?? 0x03;
+      const configured = earbudHoldActions[btnId];
+      const resolvedKind: EarbudHoldActionId =
+        configured?.kind ??
+        (targetBtn?.action === 'MODES_CAROUSEL' || targetBtn?.action === 'ANC_CYCLE'
+          ? 'CYCLE_LISTENING_MODES'
+          : targetBtn?.action === 'SPATIAL_AUDIO'
+            ? 'IMMERSIVE_AUDIO'
+            : targetBtn?.action === 'DISABLED'
+              ? 'OFF'
+              : 'VOICE_ASSISTANT');
+
+      if (resolvedKind === 'CYCLE_LISTENING_MODES') {
+        cycleListeningModes();
+      } else if (resolvedKind === 'IMMERSIVE_AUDIO') {
+        const order: Array<'OFF' | 'ROOM' | 'HEAD'> = ['OFF', 'ROOM', 'HEAD'];
+        const cur = headphone.noise?.spatialAudio ?? 'OFF';
+        const nextSpatial = order[(order.indexOf(cur) + 1) % order.length];
+        updateNoiseSettings({ spatialAudio: nextSpatial });
+        showToast(`Immersive Audio: ${nextSpatial === 'OFF' ? 'Off' : nextSpatial === 'ROOM' ? 'Still' : 'Motion'}`);
+      } else if (resolvedKind === 'CYCLE_EQ') {
+        const idx = allPresets.findIndex((p) => p.id === tuning.activePresetId);
+        const nextPreset = allPresets[(idx + 1) % allPresets.length];
+        if (nextPreset) {
+          applyPresetById(nextPreset.id);
+          setHeadsetPresetMemory((prev) => ({ ...prev, [headphone.deviceId]: nextPreset.id }));
+          showToast(`EQ Preset: ${nextPreset.name}`);
+        }
+      } else if (resolvedKind === 'LAUNCH_APP') {
+        showToast(`Launching ${configured?.appName ?? 'Spotify'}…`);
+      } else if (resolvedKind === 'VOICE_ASSISTANT') {
+        showToast('Voice assistant triggered');
+      } else {
+        showToast(`${targetBtn?.buttonLabel ?? 'Shortcut'} is set to Off`);
+      }
+
+      setHeadphone((hp) => ({
+        ...hp,
+        lastButtonPress: {
+          buttonLabel: targetBtn?.buttonLabel ?? 'Shortcut Button 1',
+          eventLabel: targetBtn?.eventLabel ?? 'Touch & hold',
+          action: targetBtn?.action ?? 'MODES_CAROUSEL',
+          atMillis: Date.now(),
+        },
+      }));
     },
-    [],
+    [
+      allPresets,
+      applyPresetById,
+      cycleListeningModes,
+      earbudHoldActions,
+      headphone.deviceId,
+      headphone.noise?.spatialAudio,
+      headphone.shortcutButtons,
+      showToast,
+      tuning.activePresetId,
+      updateNoiseSettings,
+    ],
   );
 
   const answerPairing = useCallback(
@@ -1634,6 +1836,8 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
       codecState,
       callAudio,
       automations,
+      modeCycle,
+      earbudHoldActions,
     };
     return JSON.stringify(payload, null, 2);
   }, [
@@ -1652,6 +1856,8 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
     codecState,
     callAudio,
     automations,
+    modeCycle,
+    earbudHoldActions,
   ]);
 
   const importBackupJson = useCallback(
@@ -1694,6 +1900,14 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setAutomations(parsed.automations);
         restoredItems.push(`${parsed.automations.length} automations`);
       }
+      if (Array.isArray(parsed.modeCycle)) {
+        setModeCycle(normalizeCycleModes(parsed.modeCycle));
+        restoredItems.push('Mode cycle selection');
+      }
+      if (parsed.earbudHoldActions && typeof parsed.earbudHoldActions === 'object') {
+        setEarbudHoldActions(parsed.earbudHoldActions);
+        restoredItems.push('Earbud shortcut actions');
+      }
       showToast(`Restored ${restoredItems.length} sections`);
       return { restoredItems };
     },
@@ -1709,6 +1923,8 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setBtd700ModeActive(false);
     setActiveSenseEnabled(false);
     setSelectedAudioRoute('BLUETOOTH_A2DP');
+    setModeCycle(normalizeCycleModes(undefined));
+    setEarbudHoldActions({});
     setCustomDeviceNames({});
     setHeadphone(buildDemoDeviceState('qc_ultra_earbuds_2'));
     setTuning(DEFAULT_TUNING);
@@ -1771,6 +1987,11 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setLeAudioEnabled,
     switchActivePairedDevice,
     setButtonAction,
+    modeCycle,
+    toggleCycleMode,
+    cycleListeningModes,
+    earbudHoldActions,
+    setEarbudHoldAction,
     simulateDemoButtonPress,
     answerPairing,
     tuning,

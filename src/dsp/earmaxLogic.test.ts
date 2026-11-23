@@ -5,11 +5,16 @@ import {
   EQ_BAND_MODE_ORDER,
   applyBtd700ModeTransition,
   applyListeningModePolicy,
+  canToggleCycleMode,
+  DEFAULT_CYCLE_MODES,
+  deriveCurrentCycleModeOption,
   detectExternalAudioRoute,
   formatBandSliderLabel,
   makeModeBands,
+  nextCycleModeOption,
   planTwoStageBoost,
   sampleGainsForMode,
+  toggleCycleModeOption,
 } from './earmaxLogic';
 
 test('band modes define exact 3, 4, 5, and 7 band specs with clear labels', () => {
@@ -85,7 +90,7 @@ test('two-stage volume boost configures 4-band MBC with <55 Hz trim and 10:1 -0.
   assert.equal(maxBoost.limiter.enabled, true);
 });
 
-test('BTD 700 Mode locks Quiet NC 10 and forces ActiveSense OFF; Quiet mode defaults ActiveSense OFF', () => {
+test('BTD 700 Mode defaults Quiet NC 10 and ActiveSense OFF while keeping both customizable', () => {
   const initial = {
     btd700ModeActive: false,
     activeSenseEnabled: true,
@@ -100,6 +105,15 @@ test('BTD 700 Mode locks Quiet NC 10 and forces ActiveSense OFF; Quiet mode defa
   assert.equal(engaged.noise?.cancellingLevel, 10);
   assert.equal(engaged.noise?.spatialAudio, 'ROOM');
 
+  // Switching mode keeps BTD 700 Mode active when user customizes settings.
+  const switchedToAware = applyListeningModePolicy(
+    engaged,
+    1,
+    'Aware',
+    { cancellingLevel: 0, ancEnabled: true, windBlock: false, spatialAudio: 'OFF' },
+  );
+  assert.equal(switchedToAware.btd700ModeActive, true);
+
   const released = applyBtd700ModeTransition(engaged, false);
   assert.equal(released.btd700ModeActive, false);
 
@@ -110,4 +124,31 @@ test('BTD 700 Mode locks Quiet NC 10 and forces ActiveSense OFF; Quiet mode defa
     { cancellingLevel: 10, ancEnabled: true, windBlock: false, spatialAudio: 'OFF' },
   );
   assert.equal(switchedToQuiet.activeSenseEnabled, false);
+});
+
+test('customizable mode cycle enforces minimum 2 modes and rotates cleanly', () => {
+  assert.deepEqual(DEFAULT_CYCLE_MODES, ['QUIET', 'AWARE', 'BTD_700']);
+  const twoOnly = toggleCycleModeOption(DEFAULT_CYCLE_MODES, 'AWARE');
+  assert.deepEqual(twoOnly, ['QUIET', 'BTD_700']);
+  assert.equal(canToggleCycleMode(twoOnly, 'QUIET'), false);
+  assert.deepEqual(toggleCycleModeOption(twoOnly, 'QUIET'), twoOnly);
+
+  const withCinema = toggleCycleModeOption(twoOnly, 'CINEMA');
+  assert.deepEqual(withCinema, ['QUIET', 'CINEMA', 'BTD_700']);
+  assert.equal(nextCycleModeOption(withCinema, 'QUIET'), 'CINEMA');
+  assert.equal(nextCycleModeOption(withCinema, 'CINEMA'), 'BTD_700');
+  assert.equal(nextCycleModeOption(withCinema, 'BTD_700'), 'QUIET');
+
+  assert.equal(
+    deriveCurrentCycleModeOption({ btd700ModeActive: true, currentModeName: 'Quiet', currentModeIndex: 0 }),
+    'BTD_700',
+  );
+  assert.equal(
+    deriveCurrentCycleModeOption({ btd700ModeActive: false, currentModeName: 'Cinema', currentModeIndex: 3 }),
+    'CINEMA',
+  );
+  assert.equal(
+    deriveCurrentCycleModeOption({ btd700ModeActive: false, currentModeName: null, spatialAudio: 'HEAD' }),
+    'IMMERSION',
+  );
 });

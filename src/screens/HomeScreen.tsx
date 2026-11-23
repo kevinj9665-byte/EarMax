@@ -676,8 +676,8 @@ export const HomeScreen: React.FC = () => {
                 <div className="text-sm font-semibold text-[var(--earshot-ink)]">BTD 700 Mode</div>
                 <div className="text-xs text-[var(--earshot-muted)]">
                   {btd700ModeActive
-                    ? 'USB-C aptX Lossless Pro EQ active · Quiet (10/10) locked · ActiveSense OFF'
-                    : 'Unlocks USB-C lossless DSP, locks Quiet (10) & disables ActiveSense'}
+                    ? 'USB-C aptX Lossless Pro EQ active · Defaulted to Quiet (NC 10) & ActiveSense Off — customize freely anytime.'
+                    : 'Defaults to Quiet (NC 10) & ActiveSense Off — customize anytime. Unlocks USB aptX Lossless Pro EQ.'}
                 </div>
               </div>
               <FieldSwitch
@@ -705,16 +705,14 @@ export const HomeScreen: React.FC = () => {
                 <>
                   <div className="space-y-1">
                     <div className="flex items-center justify-between text-sm">
-                      <span className="font-medium">
-                        Noise cancelling{btd700ModeActive ? ' (Locked by BTD 700 Mode)' : ''}
-                      </span>
+                      <span className="font-medium">Noise cancelling</span>
                       <span className="font-mono-tabular font-semibold">{headphone.noise.cancellingLevel}</span>
                     </div>
                     <FieldSlider
                       min={0}
                       max={10}
                       value={headphone.noise.cancellingLevel}
-                      disabled={btd700ModeActive || (!headphone.noise.ancEnabled && !headphone.capabilities.ancAlwaysOn)}
+                      disabled={!headphone.noise.ancEnabled && !headphone.capabilities.ancAlwaysOn}
                       onChange={(val) => updateNoiseSettings({ cancellingLevel: val })}
                       ariaLabel="Noise cancelling level"
                     />
@@ -722,6 +720,11 @@ export const HomeScreen: React.FC = () => {
                       <span>Aware</span>
                       <span>Quiet</span>
                     </div>
+                    {btd700ModeActive && (
+                      <p className="text-xs text-[var(--earshot-muted)] pt-1">
+                        BTD 700 Mode defaulted to Quiet (NC 10) &amp; ActiveSense Off — customize freely anytime.
+                      </p>
+                    )}
                   </div>
 
                   {headphone.capabilities.activeSense && (
@@ -729,14 +732,11 @@ export const HomeScreen: React.FC = () => {
                       <div className="min-w-0 pr-3">
                         <div className="text-sm font-medium">ActiveSense</div>
                         <div className="text-xs text-[var(--earshot-muted)]">
-                          {btd700ModeActive
-                            ? 'Forced OFF while BTD 700 Mode is active'
-                            : 'AutoAwareNoise adaptively dampens sudden loud noise'}
+                          AutoAwareNoise adaptively dampens sudden loud noise
                         </div>
                       </div>
                       <FieldSwitch
                         checked={Boolean(headphone.activeSenseEnabled)}
-                        disabled={btd700ModeActive}
                         onChange={setActiveSense}
                         label="Toggle ActiveSense"
                       />
@@ -753,7 +753,7 @@ export const HomeScreen: React.FC = () => {
                       </div>
                       <FieldSwitch
                         checked={headphone.noise.ancEnabled}
-                        disabled={btd700ModeActive || headphone.capabilities.ancAlwaysOn}
+                        disabled={headphone.capabilities.ancAlwaysOn}
                         onChange={(v) => updateNoiseSettings({ ancEnabled: v })}
                         label="Toggle ANC power"
                       />

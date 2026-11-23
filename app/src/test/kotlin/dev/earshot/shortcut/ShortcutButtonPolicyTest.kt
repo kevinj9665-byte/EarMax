@@ -28,11 +28,14 @@ class ShortcutButtonPolicyTest {
     }
 
     @Test
-    fun `every Earshot action needs voice assistant, only when the device offers it`() {
+    fun `every Earshot action needs voice assistant, and CycleModes prefers MODES_CAROUSEL when offered`() {
         for (choice in earshotChoices) for (supported in supportedSets) {
             val expected = ButtonAction.VOICE_ASSISTANT.takeIf { it in supported }
             assertEquals(expected, ShortcutButtonPolicy.desiredMode(choice, supported), "$choice with $supported")
         }
+        val withCarousel = qcUltra2 + ButtonAction.MODES_CAROUSEL
+        assertEquals(ButtonAction.MODES_CAROUSEL, ShortcutButtonPolicy.desiredMode(ShortcutAction.CycleModes, withCarousel))
+        assertEquals(ButtonAction.VOICE_ASSISTANT, ShortcutButtonPolicy.desiredMode(ShortcutAction.CycleModes, qcUltra2))
     }
 
     @Test
@@ -129,5 +132,22 @@ class ShortcutButtonPolicyTest {
         val saved = ShortcutSettings().withChoice(address, "QC", ShortcutAction.VoiceMemo)
         assertEquals(ShortcutAction.VoiceMemo, ShortcutButtonPolicy.displayedChoice(saved, address, onImmersive))
         assertEquals(ShortcutAction.OpenAssistant(), ShortcutButtonPolicy.displayedChoice(ShortcutSettings(), null, null))
+
+        val onCarousel = ButtonAssignment(0x03, 9, ButtonAction.MODES_CAROUSEL, qcUltra2 + ButtonAction.MODES_CAROUSEL)
+        assertEquals(ShortcutAction.CycleModes, ShortcutButtonPolicy.displayedChoice(ShortcutSettings(), address, onCarousel))
+    }
+
+    @Test
+    fun `secondary earbud resolves independent stored ShortcutAction before falling back to hardware mode`() {
+        val address = "68:F2:1F:12:34:57"
+        val left = ButtonAssignment(0x04, 9, ButtonAction.SPATIAL_AUDIO, qcUltra2 + ButtonAction.MODES_CAROUSEL)
+        assertEquals(
+            ShortcutAction.HeadphoneButton(ButtonAction.SPATIAL_AUDIO.storedId),
+            SecondaryButtonPolicy.displayedAction(ShortcutSettings(), address, left),
+        )
+        val withCycle = ShortcutSettings().withButtonAction(address, 0x04, ShortcutAction.CycleEq)
+        assertEquals(ShortcutAction.CycleEq, SecondaryButtonPolicy.displayedAction(withCycle, address, left))
+        assertEquals(ButtonAction.VOICE_ASSISTANT, SecondaryButtonPolicy.hardwareModeFor(ShortcutAction.CycleEq, left))
+        assertEquals(ButtonAction.MODES_CAROUSEL, SecondaryButtonPolicy.hardwareModeFor(ShortcutAction.CycleModes, left))
     }
 }

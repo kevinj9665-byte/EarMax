@@ -76,8 +76,9 @@ internal data class PersistedEarbudState(
  *
  * 1. Persists custom Pro EQ slider settings, active band mode, AutoEq preset, Volume Boost,
  *    BTD 700 Mode, ActiveSense state, and last-used listening / Immersive Audio mode in DataStore.
- * 2. Enforces BTD 700 Mode: engaging it activates the USB-C aptX Lossless DSP audio path, locks
- *    Noise Cancelling to 10 (Quiet), and forces ActiveSense OFF.
+ * 2. BTD 700 Mode: engaging it activates the USB-C aptX Lossless DSP audio path and defaults to
+ *    Quiet (NC 10) + ActiveSense OFF, while keeping Noise Cancelling, ANC toggle, and ActiveSense
+ *    freely customizable at any time.
  * 3. Defaults ActiveSense to OFF whenever Quiet mode or BTD 700 Mode is selected, while still
  *    letting the user toggle ActiveSense manually via `[1.29] AutoAwareMode`.
  * 4. Automatically re-applies persisted settings whenever the earbuds reconnect.
@@ -158,8 +159,7 @@ class EarbudStateCoordinator internal constructor(
 
     /**
      * Records a user-initiated listening mode selection (Quiet / Aware / Immersion / Cinema / custom).
-     * Switching to Quiet defaults ActiveSense to OFF; switching away from Quiet unlocks BTD 700 Mode
-     * if it was locking the slider, while persisting the new mode.
+     * Switching to Quiet defaults ActiveSense to OFF while persisting the new mode.
      */
     suspend fun recordModeSelection(index: Int) {
         loaded.await()
@@ -168,16 +168,13 @@ class EarbudStateCoordinator internal constructor(
         val isQuiet = quietSlot != null && index == quietSlot
         mutex.withLock {
             val modeNoise = hp.modes.firstOrNull { m -> m.index == index }?.settings?.toSnapshot()
-            val unlockBtd = !isQuiet && state.btd700ModeActive
             updateStateLocked {
                 it.copy(
-                    btd700ModeActive = if (unlockBtd) false else it.btd700ModeActive,
                     activeSenseEnabled = if (isQuiet) false else it.activeSenseEnabled,
                     lastModeIndex = index,
                     lastNoise = modeNoise ?: it.lastNoise,
                 )
             }
-            if (unlockBtd) _btd700ModeActive.value = false
         }
         if (isQuiet && hp.isConnected && hp.capabilities.activeSense) {
             runCatching { headphones.setActiveSense(false) }
@@ -185,47 +182,36 @@ class EarbudStateCoordinator internal constructor(
     }
 
     /**
-     * Records a user-initiated noise / Bose Immersive Audio change (Off / Still / Motion or ANC level).
+     * Records a user-initiated noise / Bose Immersive Audio change (Off / Still / Motion, ANC toggle,
+     * or cancelling level) without locking or turning off BTD 700 Mode.
      */
     suspend fun recordNoiseChange(settings: NoiseSettings) {
         loaded.await()
-        val coerced = mutex.withLock {
-            val snap = if (state.btd700ModeActive) {
-                NoiseSnapshot(cancellingLevel = MAX_ANC_LEVEL, ancEnabled = true, spatialAudio = settings.spatialAudio)
-            } else {
-                settings.toSnapshot()
-            }
-            updateStateLocked { it.copy(lastNoise = snap) }
-            snap
-        }
-        if (state.btd700ModeActive && (settings.cancellingLevel < MAX_ANC_LEVEL || !settings.ancEnabled)) {
-            val hp = headphones.state.value
-            if (hp.isConnected) {
-                runCatching { headphones.setNoise(coerced.toNoiseSettings(windBlock = false)) }
-            }
+        mutex.withLock {
+            updateStateLocked { it.copy(lastNoise = settings.toSnapshot()) }
         }
     }
 
     /**
-     * Direct ActiveSense toggle via Bose BMAP `[1.29] AutoAwareMode`, persisted across reconnects.
+     * Direct ActiveSense toggle via Bose BMAP `[1.29] AutoAwareMode`, persisted across reconnects
+     * and customizable even while BTD 700 Mode is active.
      */
     suspend fun setActiveSenseEnabled(enabled: Boolean) {
         loaded.await()
-        val lockedByBtd = mutex.withLock { state.btd700ModeActive }
-        val target = if (lockedByBtd) false else enabled
         mutex.withLock {
-            updateStateLocked { it.copy(activeSenseEnabled = target) }
+            updateStateLocked { it.copy(activeSenseEnabled = enabled) }
         }
         val hp = headphones.state.value
         if (hp.isConnected && hp.capabilities.activeSense) {
-            runCatching { headphones.setActiveSense(target) }
+            runCatching { headphones.setActiveSense(enabled) }
         }
     }
 
     /**
      * Engages or releases BTD 700 Mode:
-     * - ON: unlocks USB-C aptX Lossless Pro EQ & Boost path, locks NC slider to 10 (Quiet), forces ActiveSense OFF.
-     * - OFF: releases BTD 700 USB DSP override and unlocks the Noise Cancelling slider.
+     * - ON: unlocks USB-C aptX Lossless Pro EQ & Boost path and defaults earbuds to Quiet (NC 10)
+     *   and ActiveSense OFF; user can customize ANC / ActiveSense freely afterward.
+     * - OFF: releases BTD 700 USB DSP override.
      */
     suspend fun setBtd700ModeEnabled(enabled: Boolean) {
         loaded.await()
@@ -306,39 +292,23 @@ class EarbudStateCoordinator internal constructor(
             if (savedTuning != null && savedTuning != tuning.state.value.settings) {
                 tuning.restoreSettings(savedTuning)
             }
-            if (snap.btd700ModeActive) {
-                val quietSlot = findQuietSlotIndex(hp)
-                if (quietSlot != null && headphones.state.value.currentModeIndex != quietSlot) {
-                    runCatching { headphones.setMode(quietSlot) }
-                }
-                val targetSpatial = snap.lastNoise?.spatialAudio ?: SpatialAudio.OFF
-                val quietNoise = NoiseSettings(
-                    cancellingLevel = MAX_ANC_LEVEL,
-                    ancEnabled = true,
-                    windBlock = false,
-                    spatialAudio = targetSpatial,
-                )
-                if (headphones.state.value.noise != quietNoise) {
-                    runCatching { headphones.setNoise(quietNoise) }
-                }
-                if (hp.capabilities.activeSense) {
-                    runCatching { headphones.setActiveSense(false) }
-                }
-            } else {
-                val modeIndex = snap.lastModeIndex?.takeIf { idx -> hp.modes.any { it.index == idx && it.isConfigured } }
-                if (modeIndex != null && headphones.state.value.currentModeIndex != modeIndex) {
-                    runCatching { headphones.setMode(modeIndex) }
-                }
-                val noise = snap.lastNoise?.toNoiseSettings(windBlock = false)
-                if (noise != null && headphones.state.value.noise != noise) {
-                    runCatching { headphones.setNoise(noise) }
-                }
-                if (hp.capabilities.activeSense) {
-                    val quietSlot = findQuietSlotIndex(hp)
-                    val targetActiveSense = if (modeIndex != null && modeIndex == quietSlot) false else snap.activeSenseEnabled
-                    if (targetActiveSense != null && headphones.state.value.activeSenseEnabled != targetActiveSense) {
-                        runCatching { headphones.setActiveSense(targetActiveSense) }
-                    }
+            val quietSlot = findQuietSlotIndex(hp)
+            val fallbackMode = if (snap.btd700ModeActive) quietSlot else null
+            val modeIndex = (snap.lastModeIndex ?: fallbackMode)
+                ?.takeIf { idx -> hp.modes.any { it.index == idx && it.isConfigured } }
+            if (modeIndex != null && headphones.state.value.currentModeIndex != modeIndex) {
+                runCatching { headphones.setMode(modeIndex) }
+            }
+            val targetNoise = snap.lastNoise?.toNoiseSettings(windBlock = false)
+                ?: if (snap.btd700ModeActive) NoiseSettings(MAX_ANC_LEVEL, true, false, SpatialAudio.OFF) else null
+            if (targetNoise != null && headphones.state.value.noise != targetNoise) {
+                runCatching { headphones.setNoise(targetNoise) }
+            }
+            if (hp.capabilities.activeSense) {
+                val targetActiveSense = snap.activeSenseEnabled
+                    ?: if (snap.btd700ModeActive || (modeIndex != null && modeIndex == quietSlot)) false else null
+                if (targetActiveSense != null && headphones.state.value.activeSenseEnabled != targetActiveSense) {
+                    runCatching { headphones.setActiveSense(targetActiveSense) }
                 }
             }
         } finally {

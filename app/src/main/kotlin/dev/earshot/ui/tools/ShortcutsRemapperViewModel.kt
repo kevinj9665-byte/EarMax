@@ -1,6 +1,7 @@
 package dev.earshot.ui.tools
 
 import androidx.lifecycle.viewModelScope
+import dev.earshot.R
 import dev.earshot.core.ButtonAction
 import dev.earshot.core.ButtonAssignment
 import dev.earshot.core.HeadphoneRepository
@@ -8,9 +9,11 @@ import dev.earshot.core.HeadphoneState
 import dev.earshot.extras.HeadphoneLabels
 import dev.earshot.shortcut.AssistantCandidate
 import dev.earshot.shortcut.ControlSignal
+import dev.earshot.shortcut.CycleModeOption
 import dev.earshot.shortcut.DetectedShortcut
 import dev.earshot.shortcut.DetectionSession
 import dev.earshot.shortcut.FirstPressHint
+import dev.earshot.shortcut.ModeCyclePolicy
 import dev.earshot.shortcut.PhysicalControl
 import dev.earshot.shortcut.PressStyle
 import dev.earshot.shortcut.SecondaryButtonPolicy
@@ -86,8 +89,13 @@ data class ShortcutsUiState(
     val secondaryButtons: List<ButtonAssignment> get() = buttons.drop(1)
     /** Two or more Bose buttons on Voice assistant: they run the same Earshot action. */
     val sharesAssistant: Boolean get() = SecondaryButtonPolicy.sharesAssistant(buttons)
+    /** Normalized ordered list of modes included in the Cycle Listening Modes action. */
+    val modeCycle: List<CycleModeOption> get() = ModeCyclePolicy.normalize(settings.modeCycle)
     /** The last detection of this headset's assistant gesture, with the user's name for the control. */
     val detected: DetectedShortcut? get() = settings.detectedFor(headset?.address)
+    /** Resolves the independent [ShortcutAction] displayed for a secondary bud/button. */
+    fun secondaryAction(button: ButtonAssignment): ShortcutAction =
+        SecondaryButtonPolicy.displayedAction(settings, headset?.address, button)
 }
 
 class ShortcutsRemapperViewModel(
@@ -134,11 +142,36 @@ class ShortcutsRemapperViewModel(
         engine.prefs.update { it.withDetectedName(address, control, press, customName) }
     }
 
-    /** A secondary Bose button (earbuds: the other bud): saved for that headset, then written. */
+    /** Legacy mode-only setter retained for compatibility. */
     fun chooseSecondary(buttonId: Int, mode: ButtonAction) = launchCatching {
         val headset = state.value.headset?.takeIf { it.viaEarshot } ?: return@launchCatching
         engine.prefs.update { it.withButtonChoice(headset.address, buttonId, mode.storedId) }
         engine.buttonSync.applySecondary(buttonId, mode)
+    }
+
+    /** Independent full-action setter for a secondary earbud/button (e.g. Left Earbud 0x04). */
+    fun chooseSecondaryAction(buttonId: Int, action: ShortcutAction) = launchCatching {
+        val headset = state.value.headset?.takeIf { it.viaEarshot } ?: return@launchCatching
+        val button = state.value.buttons.firstOrNull { it.buttonId == buttonId }
+        val hwMode = button?.let { SecondaryButtonPolicy.hardwareModeFor(action, it) }
+        engine.prefs.update {
+            var next = it.withButtonAction(headset.address, buttonId, action)
+            if (hwMode != null) next = next.withButtonChoice(headset.address, buttonId, hwMode.storedId)
+            next
+        }
+        engine.buttonSync.applySecondaryAction(buttonId, action)
+    }
+
+    /** Adds or removes [option] in the customizable mode cycle, enforcing the 2-mode minimum. */
+    fun toggleCycleMode(option: CycleModeOption) {
+        val current = state.value.modeCycle
+        if (!ModeCyclePolicy.canToggle(current, option)) {
+            messenger.show(R.string.mode_cycle_picker_min_error)
+            return
+        }
+        launchCatching {
+            engine.prefs.update { it.withModeCycle(ModeCyclePolicy.toggle(it.modeCycle, option)) }
+        }
     }
 
     /**

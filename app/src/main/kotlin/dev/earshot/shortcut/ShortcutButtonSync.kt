@@ -3,6 +3,7 @@ package dev.earshot.shortcut
 import android.util.Log
 import dev.earshot.core.ButtonAction
 import dev.earshot.core.ButtonAssignment
+import dev.earshot.core.HeadphoneCommandException
 import dev.earshot.core.HeadphoneRepository
 import dev.earshot.core.HeadphoneState
 import kotlinx.coroutines.CancellationException
@@ -71,15 +72,50 @@ class ShortcutButtonSync(
 
     private suspend fun reapply(address: String) {
         val saved = runCatching { settings() }.getOrNull() ?: return
-        ShortcutButtonPolicy.writeOnConnect(saved, address, button(headphones.state.value))?.let { mode ->
-            log("setting the shortcut button to ${mode.name} for the saved choice")
-            writeOnConnect { headphones.setShortcutButton(mode) }
+        button(headphones.state.value)?.let { primary ->
+            val mode = ShortcutButtonPolicy.writeOnConnect(saved, address, primary)
+            if (mode != null) {
+                log("setting the shortcut button to ${mode.name} for the saved choice")
+                writeOnConnect { writeWithFallback(primary, saved.actionFor(address), mode, useSecondaryCall = false) }
+            }
         }
-        // The other buds' / buttons' records: only what the user set for them.
+        // The other buds' / buttons' records: apply independent buttonAction if saved, else legacy buttonChoice.
         for (b in buttons(headphones.state.value).drop(1)) {
-            val mode = SecondaryButtonPolicy.writeFor(saved.buttonChoiceFor(address, b.buttonId), b) ?: continue
-            log("setting button 0x%02x to ${mode.name} for the saved choice".format(b.buttonId))
-            writeOnConnect { headphones.setShortcutButton(b.buttonId, b.eventType, mode) }
+            val savedAction = saved.buttonActionFor(address, b.buttonId)
+            if (savedAction != null) {
+                val mode = SecondaryButtonPolicy.writeFor(savedAction, b) ?: continue
+                log("setting button 0x%02x to ${mode.name} for the saved action".format(b.buttonId))
+                writeOnConnect { writeWithFallback(b, savedAction, mode, useSecondaryCall = true) }
+            } else {
+                val mode = SecondaryButtonPolicy.writeFor(saved.buttonChoiceFor(address, b.buttonId), b) ?: continue
+                log("setting button 0x%02x to ${mode.name} for the saved choice".format(b.buttonId))
+                writeOnConnect { headphones.setShortcutButton(b.buttonId, b.eventType, mode) }
+            }
+        }
+    }
+
+    private suspend fun writeWithFallback(
+        button: ButtonAssignment,
+        action: ShortcutAction,
+        desired: ButtonAction,
+        useSecondaryCall: Boolean,
+    ) {
+        try {
+            if (useSecondaryCall) headphones.setShortcutButton(button.buttonId, button.eventType, desired)
+            else headphones.setShortcutButton(desired)
+        } catch (e: HeadphoneCommandException) {
+            // If native MODES_CAROUSEL (17) is rejected by firmware, fall back to VPA so Android handles CycleModes.
+            if (action == ShortcutAction.CycleModes &&
+                desired == ButtonAction.MODES_CAROUSEL &&
+                ButtonAction.VOICE_ASSISTANT in button.supportedActions &&
+                button.action != ButtonAction.VOICE_ASSISTANT
+            ) {
+                log("MODES_CAROUSEL refused on 0x%02x; falling back to VOICE_ASSISTANT".format(button.buttonId))
+                if (useSecondaryCall) headphones.setShortcutButton(button.buttonId, button.eventType, ButtonAction.VOICE_ASSISTANT)
+                else headphones.setShortcutButton(ButtonAction.VOICE_ASSISTANT)
+            } else {
+                throw e
+            }
         }
     }
 
@@ -107,6 +143,18 @@ class ShortcutButtonSync(
     }
 
     /**
+     * Writes the Bose `[1.9]` mode required by [action] on secondary button [buttonId].
+     */
+    suspend fun applySecondaryAction(buttonId: Int, action: ShortcutAction) {
+        val state = headphones.state.value
+        if (!state.isConnected) return
+        val b = buttons(state).firstOrNull { it.buttonId == buttonId } ?: return
+        val mode = SecondaryButtonPolicy.writeFor(action, b) ?: return
+        log("setting button 0x%02x to ${mode.name}".format(buttonId))
+        writeWithFallback(b, action, mode, useSecondaryCall = true)
+    }
+
+    /**
      * Writes the mode [choice] needs to the connected headphones, if it differs. Throws
      * `HeadphoneCommandException` (user-readable) when the headphones refuse; the saved choice
      * stays either way.
@@ -114,9 +162,11 @@ class ShortcutButtonSync(
     suspend fun applyChoice(choice: ShortcutAction) {
         val state = headphones.state.value
         if (!state.isConnected) return
-        val mode = ShortcutButtonPolicy.writeFor(choice, button(state)) ?: return
+        val b = button(state)
+        val mode = ShortcutButtonPolicy.writeFor(choice, b) ?: return
         log("setting the shortcut button to ${mode.name}")
-        headphones.setShortcutButton(mode)
+        if (b != null) writeWithFallback(b, choice, mode, useSecondaryCall = false)
+        else headphones.setShortcutButton(mode)
     }
 
     private companion object {

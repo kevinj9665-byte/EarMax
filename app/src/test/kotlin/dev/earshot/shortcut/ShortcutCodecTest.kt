@@ -7,6 +7,7 @@ import kotlin.test.assertTrue
 
 class ShortcutCodecTest {
     private val all = listOf(
+        ShortcutAction.CycleModes,
         ShortcutAction.CycleEq,
         ShortcutAction.VoiceMemo,
         ShortcutAction.LaunchApp("com.spotify.music", "Spotify"),
@@ -22,6 +23,7 @@ class ShortcutCodecTest {
 
     @Test
     fun `stored format uses stable type names`() {
+        assertEquals("""{"type":"cycle_modes"}""", ShortcutCodec.encodeAction(ShortcutAction.CycleModes))
         assertEquals("""{"type":"cycle_eq"}""", ShortcutCodec.encodeAction(ShortcutAction.CycleEq))
         assertEquals("""{"type":"voice_memo"}""", ShortcutCodec.encodeAction(ShortcutAction.VoiceMemo))
         assertEquals(
@@ -129,5 +131,31 @@ class ShortcutCodecTest {
         assertEquals(ShortcutAction.CycleEq, replaced.actionFor("aa:bb:cc:dd:ee:01"))
 
         assertTrue(s.withOverride("AA:BB:CC:DD:EE:01", null, null).overrides.isEmpty())
+    }
+
+    @Test
+    fun `independent buttonActions, modeCycle, and triggerActionFor round-trip cleanly`() {
+        val address = "68:F2:1F:12:34:57"
+        val settings = ShortcutSettings()
+            .withChoice(address, "QC Ultra 2 Earbuds", ShortcutAction.HeadphoneButton(19))
+            .withButtonAction(address, 0x04, ShortcutAction.CycleModes)
+            .withModeCycle(listOf(CycleModeOption.QUIET, CycleModeOption.CINEMA, CycleModeOption.BTD_700))
+
+        assertEquals(ShortcutAction.CycleModes, settings.buttonActionFor(address.lowercase(), 0x04))
+        assertEquals(ShortcutAction.CycleModes, settings.triggerActionFor(address))
+
+        val encodedActions = ShortcutExtrasCodec.encodeButtonActions(settings.buttonActions)
+        val encodedCycle = ShortcutExtrasCodec.encodeModeCycle(settings.modeCycle)
+        val decoded = ShortcutCodec.decodeSettings(
+            defaultAction = null,
+            overrides = ShortcutCodec.encodeOverrides(settings.overrides),
+            spokenFeedback = true,
+            seenHeadsetPress = false,
+            buttonActions = encodedActions,
+            modeCycle = encodedCycle,
+        )
+        assertEquals(settings.buttonActions, decoded.buttonActions)
+        assertEquals(listOf(CycleModeOption.QUIET, CycleModeOption.CINEMA, CycleModeOption.BTD_700), decoded.modeCycle)
+        assertEquals(ModeCyclePolicy.DEFAULT_CYCLE_MODES, ShortcutExtrasCodec.decodeModeCycle("""["QUIET"]"""))
     }
 }

@@ -27,9 +27,13 @@ import dev.earshot.core.ButtonAction
 import dev.earshot.shortcut.AssistantCandidate
 import dev.earshot.shortcut.ShortcutAction
 
-/** The entries of the remapper's "Shortcut Button 1:" dropdown. */
+/** The entries of both Right and Left earbud shortcut dropdowns. */
 internal enum class ShortcutChoice(val isNative: Boolean = false) {
-    PHONE_ASSISTANT, CYCLE_EQ, VOICE_MEMO, LAUNCH_APP,
+    CYCLE_LISTENING_MODES,
+    PHONE_ASSISTANT,
+    CYCLE_EQ,
+    VOICE_MEMO,
+    LAUNCH_APP,
     /** `[1.9]` mode 19 on the headphones themselves. */
     IMMERSIVE_AUDIO(isNative = true),
     /** `[1.9]` mode 14 (Disabled). */
@@ -37,29 +41,47 @@ internal enum class ShortcutChoice(val isNative: Boolean = false) {
     ;
 
     companion object {
-        /** Earshot's own actions, always offered, in display order. */
-        val EARSHOT = listOf(PHONE_ASSISTANT, CYCLE_EQ, VOICE_MEMO, LAUNCH_APP)
+        /** Earshot's own actions, in display order. */
+        val EARSHOT = listOf(CYCLE_LISTENING_MODES, CYCLE_EQ, PHONE_ASSISTANT, LAUNCH_APP)
+
+        /** Earbuds offer the 6 options specified for Left & Right tap-and-hold customization. */
+        val EARBUDS_OPTIONS = listOf(
+            CYCLE_LISTENING_MODES,
+            IMMERSIVE_AUDIO,
+            CYCLE_EQ,
+            PHONE_ASSISTANT,
+            LAUNCH_APP,
+            OFF,
+        )
 
         fun forNative(mode: ButtonAction): ShortcutChoice? = when (mode) {
             ButtonAction.SPATIAL_AUDIO -> IMMERSIVE_AUDIO
             ButtonAction.DISABLED -> OFF
+            ButtonAction.MODES_CAROUSEL -> CYCLE_LISTENING_MODES
             else -> null
         }
 
         /**
-         * The dropdown's options: Earshot's actions, then the native modes the headphones report
-         * ([nativeModes], already filtered by `ShortcutButtonPolicy.nativeOptions`). The current
-         * choice is always listed, so a saved native choice shows even while that headset isn't
-         * connected through Earshot.
+         * The dropdown's options for a shortcut button.
+         * - When [earbuds] is true, offers the 6 earbud hold options (`Cycle Listening Modes`,
+         *   `Immersive Audio`, `Cycle EQ Preset`, `Voice Assistant`, `Launch an App…`, `Off`).
+         * - Otherwise, offers Earshot's actions + [nativeModes] reported by the headset.
+         * The current choice is always listed.
          */
-        fun options(nativeModes: List<ButtonAction>, current: ShortcutChoice): List<ShortcutChoice> {
-            val list = EARSHOT + nativeModes.mapNotNull(::forNative)
+        fun options(nativeModes: List<ButtonAction>, current: ShortcutChoice, earbuds: Boolean = false): List<ShortcutChoice> {
+            val list = if (earbuds) {
+                EARBUDS_OPTIONS
+            } else {
+                listOf(CYCLE_LISTENING_MODES, PHONE_ASSISTANT, CYCLE_EQ, VOICE_MEMO, LAUNCH_APP) +
+                    nativeModes.mapNotNull(::forNative).filterNot { it == CYCLE_LISTENING_MODES }
+            }
             return if (current in list) list else list + current
         }
     }
 }
 
 internal fun ShortcutAction.choice(): ShortcutChoice = when (this) {
+    ShortcutAction.CycleModes -> ShortcutChoice.CYCLE_LISTENING_MODES
     is ShortcutAction.OpenAssistant -> ShortcutChoice.PHONE_ASSISTANT
     ShortcutAction.CycleEq -> ShortcutChoice.CYCLE_EQ
     ShortcutAction.VoiceMemo -> ShortcutChoice.VOICE_MEMO
@@ -71,6 +93,7 @@ internal fun ShortcutAction.choice(): ShortcutChoice = when (this) {
 @Composable
 internal fun choiceLabel(choice: ShortcutChoice, earbuds: Boolean): String = stringResource(
     when (choice) {
+        ShortcutChoice.CYCLE_LISTENING_MODES -> R.string.shortcut_choice_cycle_modes
         ShortcutChoice.PHONE_ASSISTANT -> R.string.shortcut_choice_assistant
         ShortcutChoice.CYCLE_EQ -> R.string.shortcut_action_cycle_eq
         ShortcutChoice.VOICE_MEMO -> R.string.shortcut_action_voice_memo

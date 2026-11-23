@@ -42,12 +42,11 @@ fun NoiseControls(
     activeSense: Boolean? = null,
     onActiveSenseChange: ((Boolean) -> Unit)? = null,
     activeSenseEnabled: Boolean = enabled,
-    btd700Locked: Boolean = false,
+    btd700Active: Boolean = false,
 ) {
     val ancOn = settings.ancEnabled || capabilities.ancAlwaysOn
-    val levelHasEffect = ancOn && !settings.windBlock && !btd700Locked
-    val effectiveLevel = if (btd700Locked) 10f else settings.cancellingLevel.toFloat()
-    var dragLevel by remember(settings.cancellingLevel, btd700Locked) { mutableFloatStateOf(effectiveLevel) }
+    val levelHasEffect = ancOn && !settings.windBlock
+    var dragLevel by remember(settings.cancellingLevel) { mutableFloatStateOf(settings.cancellingLevel.toFloat()) }
     val showActiveSense = capabilities.activeSense && activeSense != null && onActiveSenseChange != null
 
     Column(modifier.fillMaxWidth()) {
@@ -67,15 +66,17 @@ fun NoiseControls(
                 startLabel = stringResource(R.string.noise_label_aware),
                 endLabel = stringResource(R.string.noise_label_quiet),
             )
+            AnimatedVisibility(visible = btd700Active) {
+                Text(
+                    stringResource(R.string.noise_hint_btd700_active),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+            }
             AnimatedVisibility(visible = !levelHasEffect) {
                 Text(
-                    stringResource(
-                        when {
-                            btd700Locked -> R.string.noise_hint_btd700_locked
-                            !ancOn -> R.string.noise_hint_anc_off
-                            else -> R.string.noise_hint_wind_on
-                        },
-                    ),
+                    stringResource(if (!ancOn) R.string.noise_hint_anc_off else R.string.noise_hint_wind_on),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 4.dp),
@@ -85,7 +86,7 @@ fun NoiseControls(
                 SwitchRow(
                     title = stringResource(R.string.noise_activesense),
                     subtitle = if (compact) null else stringResource(R.string.noise_activesense_subtitle),
-                    checked = if (btd700Locked) false else activeSense == true,
+                    checked = activeSense == true,
                     enabled = activeSenseEnabled,
                     onCheckedChange = onActiveSenseChange,
                 )
@@ -95,7 +96,7 @@ fun NoiseControls(
                 if (capabilities.ancToggle) SwitchRow(
                     title = stringResource(R.string.noise_anc),
                     checked = settings.ancEnabled,
-                    enabled = enabled && !btd700Locked,
+                    enabled = enabled,
                     onCheckedChange = { onChange(settings.copy(ancEnabled = it)) },
                 )
                 if (capabilities.ancToggle && capabilities.windBlock) DashedDivider()
@@ -110,7 +111,7 @@ fun NoiseControls(
                     title = stringResource(R.string.noise_anc),
                     subtitle = stringResource(R.string.noise_anc_subtitle),
                     checked = settings.ancEnabled,
-                    enabled = enabled && !btd700Locked,
+                    enabled = enabled,
                     onCheckedChange = { onChange(settings.copy(ancEnabled = it)) },
                 )
                 if (capabilities.ancToggle && capabilities.windBlock) DashedDivider()

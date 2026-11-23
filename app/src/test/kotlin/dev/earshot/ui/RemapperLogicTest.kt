@@ -3,8 +3,10 @@ package dev.earshot.ui
 import dev.earshot.core.ButtonAction
 import dev.earshot.core.HeadphoneState
 import dev.earshot.core.fake.FakeHeadphoneRepository
+import dev.earshot.shortcut.CycleModeOption
 import dev.earshot.shortcut.HandlerStatus
 import dev.earshot.shortcut.HfpHeadset
+import dev.earshot.shortcut.ModeCyclePolicy
 import dev.earshot.shortcut.ShortcutAction
 import dev.earshot.shortcut.ShortcutSettings
 import dev.earshot.ui.tools.RemapperHeadset
@@ -36,15 +38,35 @@ class RemapperLogicTest {
     }
 
     @Test
-    fun `dropdown offers Earshot's actions, then only the native modes the device reports`() {
-        assertEquals(ShortcutChoice.EARSHOT, ShortcutChoice.options(emptyList(), ShortcutChoice.CYCLE_EQ))
+    fun `dropdown offers Earshot's actions, native modes on headphones, and the 6 required options on earbuds`() {
+        val base = listOf(
+            ShortcutChoice.CYCLE_LISTENING_MODES,
+            ShortcutChoice.PHONE_ASSISTANT,
+            ShortcutChoice.CYCLE_EQ,
+            ShortcutChoice.VOICE_MEMO,
+            ShortcutChoice.LAUNCH_APP,
+        )
+        assertEquals(base, ShortcutChoice.options(emptyList(), ShortcutChoice.CYCLE_EQ))
         assertEquals(
-            ShortcutChoice.EARSHOT + ShortcutChoice.IMMERSIVE_AUDIO + ShortcutChoice.OFF,
+            base + ShortcutChoice.IMMERSIVE_AUDIO + ShortcutChoice.OFF,
             ShortcutChoice.options(listOf(ButtonAction.SPATIAL_AUDIO, ButtonAction.DISABLED), ShortcutChoice.PHONE_ASSISTANT),
         )
-        assertEquals(ShortcutChoice.EARSHOT + ShortcutChoice.OFF, ShortcutChoice.options(listOf(ButtonAction.DISABLED), ShortcutChoice.OFF))
+        assertEquals(base + ShortcutChoice.OFF, ShortcutChoice.options(listOf(ButtonAction.DISABLED), ShortcutChoice.OFF))
         // A saved native choice stays visible while that headset isn't connected through Earshot.
-        assertEquals(ShortcutChoice.EARSHOT + ShortcutChoice.IMMERSIVE_AUDIO, ShortcutChoice.options(emptyList(), ShortcutChoice.IMMERSIVE_AUDIO))
+        assertEquals(base + ShortcutChoice.IMMERSIVE_AUDIO, ShortcutChoice.options(emptyList(), ShortcutChoice.IMMERSIVE_AUDIO))
+
+        // Earbuds always present all 6 required options for both Right and Left buds.
+        assertEquals(
+            listOf(
+                ShortcutChoice.CYCLE_LISTENING_MODES,
+                ShortcutChoice.IMMERSIVE_AUDIO,
+                ShortcutChoice.CYCLE_EQ,
+                ShortcutChoice.PHONE_ASSISTANT,
+                ShortcutChoice.LAUNCH_APP,
+                ShortcutChoice.OFF,
+            ),
+            ShortcutChoice.options(emptyList(), ShortcutChoice.CYCLE_LISTENING_MODES, earbuds = true),
+        )
     }
 
     @Test
@@ -67,14 +89,22 @@ class RemapperLogicTest {
     }
 
     @Test
-    fun `one row per Bose record, the shared-assistant warning and the detected control`() {
+    fun `one row per Bose record, independent secondary action, mode cycle defaults, and detected control`() {
         val hp = FakeHeadphoneRepository.connectedEarbudsState()
         val headset = RemapperHeadset.resolve(hp, null)!!
-        val modes = listOf(ButtonAction.VOICE_ASSISTANT, ButtonAction.DISABLED, ButtonAction.SPATIAL_AUDIO)
+        val modes = listOf(ButtonAction.VOICE_ASSISTANT, ButtonAction.DISABLED, ButtonAction.SPATIAL_AUDIO, ButtonAction.MODES_CAROUSEL)
         val right = dev.earshot.core.ButtonAssignment(0x03, 9, ButtonAction.VOICE_ASSISTANT, modes)
         val left = right.copy(buttonId = 0x04)
-        val s = ShortcutsUiState(headset = headset, button = right, buttons = listOf(right, left))
+        val s = ShortcutsUiState(
+            headset = headset,
+            settings = ShortcutSettings().withButtonAction(headset.address, 0x04, ShortcutAction.CycleModes),
+            button = right,
+            buttons = listOf(right, left),
+        )
         assertEquals(listOf(left), s.secondaryButtons)
+        assertEquals(ShortcutAction.CycleModes, s.secondaryAction(left))
+        assertEquals(ModeCyclePolicy.DEFAULT_CYCLE_MODES, s.modeCycle)
+        assertEquals(listOf(CycleModeOption.QUIET, CycleModeOption.AWARE, CycleModeOption.BTD_700), s.modeCycle)
         assertTrue(s.sharesAssistant)
         assertFalse(s.copy(buttons = listOf(right, left.copy(action = ButtonAction.DISABLED))).sharesAssistant)
         // A single-button product, or a headset without BMAP: no extra rows.

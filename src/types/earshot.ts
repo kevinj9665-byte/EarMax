@@ -121,6 +121,19 @@ export interface ButtonPress {
   atMillis: number;
 }
 
+export type EarbudHoldActionId =
+  | 'CYCLE_LISTENING_MODES'
+  | 'IMMERSIVE_AUDIO'
+  | 'CYCLE_EQ'
+  | 'VOICE_ASSISTANT'
+  | 'LAUNCH_APP'
+  | 'OFF';
+
+export interface EarbudHoldActionConfig {
+  kind: EarbudHoldActionId;
+  appName?: string;
+}
+
 export interface VendorControl {
   id: string;
   title: string;

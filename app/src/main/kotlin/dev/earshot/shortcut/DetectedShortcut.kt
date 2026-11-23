@@ -47,9 +47,13 @@ data class DetectedShortcut(
 @Serializable
 data class ButtonChoice(val address: String, val buttonId: Int, val mode: Int)
 
-/** JSON for the two lists; element by element, so one bad entry drops alone. */
+/** Per-button [ShortcutAction] choice (e.g. Right bud 0x03 or Left bud 0x04), stored independently. */
+@Serializable
+data class ButtonActionEntry(val address: String, val buttonId: Int, val action: ShortcutAction)
+
+/** JSON for the shortcut lists; element by element, so one bad entry drops alone. */
 internal object ShortcutExtrasCodec {
-    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = false }
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = false; classDiscriminator = "type" }
 
     fun encodeDetected(list: List<DetectedShortcut>): String = json.encodeToString(ListSerializer(DetectedShortcut.serializer()), list)
 
@@ -60,6 +64,20 @@ internal object ShortcutExtrasCodec {
 
     fun decodeButtonChoices(text: String?): List<ButtonChoice> =
         decodeEach(text) { json.decodeFromJsonElement(ButtonChoice.serializer(), it) }.distinctBy { it.address.uppercase() to it.buttonId }
+
+    fun encodeButtonActions(list: List<ButtonActionEntry>): String =
+        json.encodeToString(ListSerializer(ButtonActionEntry.serializer()), list)
+
+    fun decodeButtonActions(text: String?): List<ButtonActionEntry> =
+        decodeEach(text) { json.decodeFromJsonElement(ButtonActionEntry.serializer(), it) }.distinctBy { it.address.uppercase() to it.buttonId }
+
+    fun encodeModeCycle(list: List<CycleModeOption>): String =
+        json.encodeToString(ListSerializer(CycleModeOption.serializer()), ModeCyclePolicy.normalize(list))
+
+    fun decodeModeCycle(text: String?): List<CycleModeOption> {
+        val decoded = decodeEach(text) { json.decodeFromJsonElement(CycleModeOption.serializer(), it) }
+        return if (decoded.size >= ModeCyclePolicy.MIN_MODES) ModeCyclePolicy.normalize(decoded) else ModeCyclePolicy.DEFAULT_CYCLE_MODES
+    }
 
     private fun <T> decodeEach(text: String?, one: (kotlinx.serialization.json.JsonElement) -> T): List<T> {
         if (text.isNullOrBlank()) return emptyList()

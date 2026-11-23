@@ -132,7 +132,7 @@ object BackupInventory {
             "headset_shortcuts",
             keyTypes = mapOf(
                 "default_action" to S, "overrides" to S, "spoken_feedback" to B, "seen_headset_press" to B,
-                "detected_shortcuts" to S, "button_choices" to S,
+                "detected_shortcuts" to S, "button_choices" to S, "button_actions" to S, "mode_cycle" to S,
             ),
             localKeys = setOf("seen_headset_press"),
         ),

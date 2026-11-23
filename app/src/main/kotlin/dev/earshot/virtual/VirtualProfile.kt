@@ -122,9 +122,8 @@ data class VirtualProfile(
             firmwareVersion = "8.0.11+g5d1e2a0", battery = VirtualBattery.BUDS,
             savedModes = mapOf(4 to VirtualSlot(ModePrompt.COMMUTE, "Commute", cncWire = 2)),
             // Right bud (0x03) on Voice assistant, left bud (0x04) on Immersive Audio; both long
-            // press with the headphones' menu mask. The Bose app lets each bud's shortcut be set
-            // on its own; the exact wire form is a guess until an earbuds capture exists.
-            buttonRecords = listOf("0309010009400200010002", "0409130009400200010002"),
+            // press with the earbuds' menu mask including MODES_CAROUSEL (bit 17 -> 0x000B4002).
+            buttonRecords = listOf("030901000b400200010002", "040913000b400200010002"),
         )
 
         /**

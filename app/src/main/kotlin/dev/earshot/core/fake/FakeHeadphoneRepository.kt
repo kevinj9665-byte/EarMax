@@ -158,7 +158,15 @@ class FakeHeadphoneRepository(
 
     override suspend fun setShortcutButton(action: ButtonAction) {
         requireConnected()
-        command { s -> s.copy(shortcutButton = s.shortcutButton?.copy(action = action)) }
+        command { s ->
+            val primary = s.shortcutButton?.copy(action = action)
+            val records = if (primary != null && s.shortcutButtons.isNotEmpty()) {
+                s.shortcutButtons.map { if (it.buttonId == primary.buttonId) it.copy(action = action) else it }
+            } else {
+                s.shortcutButtons
+            }
+            s.copy(shortcutButton = primary, shortcutButtons = records)
+        }
     }
 
     override suspend fun setShortcutButton(buttonId: Int, eventType: Int, action: ButtonAction) {
@@ -418,7 +426,50 @@ class FakeHeadphoneRepository(
                 ),
                 capabilities = HeadphoneCapabilities(formFactor = FormFactor.EARBUDS, windBlock = false, activeSense = true),
                 activeSenseEnabled = false,
-                shortcutButton = null,
+                shortcutButton = ButtonAssignment(
+                    buttonId = 0x03,
+                    eventType = 9,
+                    action = ButtonAction.MODES_CAROUSEL,
+                    supportedActions = listOf(
+                        ButtonAction.VOICE_ASSISTANT,
+                        ButtonAction.DISABLED,
+                        ButtonAction.SPOTIFY_TAP,
+                        ButtonAction.MODES_CAROUSEL,
+                        ButtonAction.SPATIAL_AUDIO,
+                    ),
+                    buttonLabel = "Right shortcut",
+                    eventLabel = "Long press",
+                ),
+                shortcutButtons = listOf(
+                    ButtonAssignment(
+                        buttonId = 0x03,
+                        eventType = 9,
+                        action = ButtonAction.MODES_CAROUSEL,
+                        supportedActions = listOf(
+                            ButtonAction.VOICE_ASSISTANT,
+                            ButtonAction.DISABLED,
+                            ButtonAction.SPOTIFY_TAP,
+                            ButtonAction.MODES_CAROUSEL,
+                            ButtonAction.SPATIAL_AUDIO,
+                        ),
+                        buttonLabel = "Right shortcut",
+                        eventLabel = "Long press",
+                    ),
+                    ButtonAssignment(
+                        buttonId = 0x04,
+                        eventType = 9,
+                        action = ButtonAction.SPATIAL_AUDIO,
+                        supportedActions = listOf(
+                            ButtonAction.VOICE_ASSISTANT,
+                            ButtonAction.DISABLED,
+                            ButtonAction.SPOTIFY_TAP,
+                            ButtonAction.MODES_CAROUSEL,
+                            ButtonAction.SPATIAL_AUDIO,
+                        ),
+                        buttonLabel = "Left shortcut",
+                        eventLabel = "Long press",
+                    ),
+                ),
                 touchControlsEnabled = true,
                 autoOffMinutes = null,
                 volume = null,

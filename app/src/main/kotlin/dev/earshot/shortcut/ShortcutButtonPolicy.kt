@@ -28,6 +28,8 @@ object ShortcutButtonPolicy {
     fun desiredMode(choice: ShortcutAction, supported: Collection<ButtonAction>): ButtonAction? {
         val wanted = when (choice) {
             is ShortcutAction.HeadphoneButton -> ButtonAction.fromStoredId(choice.mode).takeIf { it in NATIVE_MODES }
+            ShortcutAction.CycleModes ->
+                if (ButtonAction.MODES_CAROUSEL in supported) ButtonAction.MODES_CAROUSEL else ButtonAction.VOICE_ASSISTANT
             else -> ButtonAction.VOICE_ASSISTANT
         }
         return wanted?.takeIf { it in supported }
@@ -64,12 +66,13 @@ object ShortcutButtonPolicy {
 
     /**
      * What the remapper shows as selected for the headset at [address]. Without an explicit choice
-     * a button already on a native option (Immersive Audio, Off) is shown as that option, since
-     * that is what the press does; otherwise the saved (or default) choice.
+     * a button already on a native option (Immersive Audio, Off, or Cycle modes) is shown as that
+     * option, since that is what the press does; otherwise the saved (or default) choice.
      */
     fun displayedChoice(settings: ShortcutSettings, address: String?, button: ButtonAssignment?): ShortcutAction {
-        if (!settings.hasExplicitChoice(address) && button != null && button.action in NATIVE_MODES) {
-            return ShortcutAction.HeadphoneButton(button.action.storedId)
+        if (!settings.hasExplicitChoice(address) && button != null) {
+            if (button.action == ButtonAction.MODES_CAROUSEL) return ShortcutAction.CycleModes
+            if (button.action in NATIVE_MODES) return ShortcutAction.HeadphoneButton(button.action.storedId)
         }
         return settings.actionFor(address)
     }

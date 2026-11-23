@@ -105,7 +105,7 @@ class EarbudStateCoordinatorTest {
     }
 
     @Test
-    fun `btd700 mode switches earbuds to Quiet ANC 10, forces ActiveSense OFF, and unlocks NC slider when turned off`() = runBlocking<Unit> {
+    fun `btd700 mode defaults to Quiet ANC 10 and ActiveSense OFF while keeping NC slider and ActiveSense unlocked`() = runBlocking<Unit> {
         val hp = RecordingEarbuds()
         val tuning = GatedFakeTuning()
         val coordinator = EarbudStateCoordinator(storeFile(), hp, tuning, appScope).also { it.start() }
@@ -117,27 +117,34 @@ class EarbudStateCoordinatorTest {
         coordinator.setActiveSenseEnabled(true)
         assertTrue(hp.state.value.activeSenseEnabled == true)
 
-        // Toggle BTD 700 Mode ON.
+        // Toggle BTD 700 Mode ON -> applies Quiet (NC 10) + ActiveSense OFF defaults and unlocks Pro EQ.
         coordinator.setBtd700ModeEnabled(true)
         assertTrue(coordinator.btd700ModeActive.value)
         assertTrue(tuning.state.value.settings.enabled, "Expected Pro EQ DSP unlocked & enabled")
         assertEquals(0, hp.state.value.currentModeIndex, "Expected Quiet mode (slot 0)")
-        assertEquals(10, hp.state.value.noise?.cancellingLevel, "Expected ANC locked to 10 (Quiet)")
+        assertEquals(10, hp.state.value.noise?.cancellingLevel, "Expected initial ANC 10 (Quiet)")
         assertTrue(hp.state.value.noise?.ancEnabled == true)
-        assertFalse(hp.state.value.activeSenseEnabled == true, "Expected ActiveSense forced OFF in BTD 700 Mode")
+        assertFalse(hp.state.value.activeSenseEnabled == true, "Expected initial ActiveSense OFF in BTD 700 Mode")
 
-        // Attempting to lower NC while BTD 700 Mode is ON keeps NC locked at 10.
-        coordinator.recordNoiseChange(NoiseSettings(cancellingLevel = 3, ancEnabled = true, spatialAudio = SpatialAudio.ROOM))
-        assertEquals(10, hp.state.value.noise?.cancellingLevel)
+        // User freely customizes NC slider & Spatial Audio & ActiveSense while BTD 700 Mode stays active.
+        val customNoise = NoiseSettings(cancellingLevel = 3, ancEnabled = true, spatialAudio = SpatialAudio.ROOM)
+        hp.setNoise(customNoise)
+        coordinator.recordNoiseChange(customNoise)
+        assertEquals(3, hp.state.value.noise?.cancellingLevel)
         assertEquals(SpatialAudio.ROOM, hp.state.value.noise?.spatialAudio)
+        assertTrue(coordinator.btd700ModeActive.value, "BTD 700 Mode must remain active after NC change")
 
-        // Toggle BTD 700 Mode OFF -> unlocks NC slider so custom level sticks.
-        coordinator.setBtd700ModeEnabled(false)
-        assertFalse(coordinator.btd700ModeActive.value)
-        val lowered = NoiseSettings(cancellingLevel = 4, ancEnabled = true, spatialAudio = SpatialAudio.OFF)
-        hp.setNoise(lowered)
-        coordinator.recordNoiseChange(lowered)
+        coordinator.setActiveSenseEnabled(true)
+        assertEquals(true, hp.state.value.activeSenseEnabled, "ActiveSense must remain freely toggleable during BTD 700 Mode")
+        assertTrue(coordinator.btd700ModeActive.value, "BTD 700 Mode must remain active after ActiveSense toggle")
+
+        // Toggling ANC master off and custom level continues to work cleanly.
+        val ancOff = NoiseSettings(cancellingLevel = 4, ancEnabled = false, spatialAudio = SpatialAudio.OFF)
+        hp.setNoise(ancOff)
+        coordinator.recordNoiseChange(ancOff)
         assertEquals(4, hp.state.value.noise?.cancellingLevel)
+        assertEquals(false, hp.state.value.noise?.ancEnabled)
+        assertTrue(coordinator.btd700ModeActive.value)
     }
 
     @Test
@@ -229,7 +236,7 @@ class EarbudStateCoordinatorTest {
     }
 
     @Test
-    fun `btd700 mode active state persists across restarts and re-applies Quiet ANC 10 + ActiveSense OFF on reconnect`() = runBlocking<Unit> {
+    fun `btd700 mode active state and custom NC plus ActiveSense overrides persist across restarts`() = runBlocking<Unit> {
         val dbFile = "earbud_btd700_persist.preferences_pb"
         val storeScope1 = CoroutineScope(Dispatchers.IO + SupervisorJob())
         val scope1 = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -240,26 +247,36 @@ class EarbudStateCoordinatorTest {
 
         tuning1.setEnabled(true)
         coord1.setBtd700ModeEnabled(true)
-        waitUntil { File(folder.root, dbFile).length() > 0 }
+        // Customize NC slider to 6 and ActiveSense to ON while BTD 700 Mode remains active.
+        val customizedNoise = NoiseSettings(cancellingLevel = 6, ancEnabled = true, spatialAudio = SpatialAudio.OFF)
+        hp1.setNoise(customizedNoise)
+        coord1.recordNoiseChange(customizedNoise)
+        coord1.setActiveSenseEnabled(true)
+        waitUntil {
+            val f = File(folder.root, dbFile)
+            f.exists() && f.readText(Charsets.ISO_8859_1).contains("\"cancellingLevel\":6")
+        }
         delay(200)
         scope1.coroutineContext[Job]?.cancelAndJoin()
         storeScope1.coroutineContext[Job]?.cancelAndJoin()
 
-        // Reconnect in Aware mode with ActiveSense ON -> coordinator must re-enforce Quiet ANC 10 + ActiveSense OFF.
-        val reconnectInAware = FakeHeadphoneRepository.connectedEarbudsState().copy(
+        // Reconnect with stock earbuds state -> coordinator restores BTD 700 Mode plus the user's customized NC 6 + ActiveSense ON.
+        val reconnectFresh = FakeHeadphoneRepository.connectedEarbudsState().copy(
             currentModeIndex = 1,
             noise = NoiseSettings(0, true, false, SpatialAudio.OFF),
-            activeSenseEnabled = true,
+            activeSenseEnabled = false,
         )
-        val hp2 = RecordingEarbuds(reconnectInAware)
+        val hp2 = RecordingEarbuds(reconnectFresh)
         val tuning2 = GatedFakeTuning()
         val coord2 = EarbudStateCoordinator(storeFile(dbFile), hp2, tuning2, appScope).also { it.start() }
         coord2.awaitLoaded()
 
         assertTrue(coord2.btd700ModeActive.value)
-        hp2.reconnectWith(reconnectInAware)
+        hp2.reconnectWith(reconnectFresh)
 
-        waitUntil { hp2.state.value.currentModeIndex == 0 && hp2.state.value.activeSenseEnabled == false }
-        assertEquals(10, hp2.state.value.noise?.cancellingLevel)
+        waitUntil { hp2.state.value.noise?.cancellingLevel == 6 && hp2.state.value.activeSenseEnabled == true }
+        assertEquals(6, hp2.state.value.noise?.cancellingLevel)
+        assertEquals(true, hp2.state.value.activeSenseEnabled)
+        assertTrue(coord2.btd700ModeActive.value)
     }
 }

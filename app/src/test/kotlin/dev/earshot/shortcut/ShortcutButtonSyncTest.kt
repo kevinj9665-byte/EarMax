@@ -147,4 +147,44 @@ class ShortcutButtonSyncTest {
         assertEquals(2, buds.writes.size)
         assertEquals(ButtonAction.VOICE_ASSISTANT, buds.state.value.shortcutButton?.action, "the right bud untouched")
     }
+
+    @Test
+    fun `CycleModes writes MODES_CAROUSEL and automatically falls back to VOICE_ASSISTANT when firmware refuses`() = runTest {
+        val buds = Buds(FakeHeadphoneRepository(backgroundScope, commandDelayMillis = 0, startConnected = true))
+        val fullModes = listOf(ButtonAction.VOICE_ASSISTANT, ButtonAction.MODES_CAROUSEL, ButtonAction.SPATIAL_AUDIO, ButtonAction.DISABLED)
+        buds.shown.update { s ->
+            s.copy(
+                shortcutButton = s.shortcutButton?.copy(supportedActions = fullModes),
+                shortcutButtons = s.shortcutButtons.map { it.copy(supportedActions = fullModes) },
+            )
+        }
+        val repoWithCarouselRefusal = object : HeadphoneRepository by buds {
+            val attempts = mutableListOf<Pair<Int, ButtonAction>>()
+            override suspend fun setShortcutButton(action: ButtonAction) =
+                setShortcutButton(0x03, 9, action)
+
+            override suspend fun setShortcutButton(buttonId: Int, eventType: Int, action: ButtonAction) {
+                attempts += buttonId to action
+                if (action == ButtonAction.MODES_CAROUSEL && buttonId == 0x04) {
+                    throw HeadphoneCommandException("Unsupported action 17 on left bud")
+                }
+                buds.setShortcutButton(buttonId, eventType, action)
+            }
+        }
+        val sync = ShortcutButtonSync(repoWithCarouselRefusal, { ShortcutSettings() }, backgroundScope, log = {})
+        // Right bud accepts native MODES_CAROUSEL (17).
+        sync.applyChoice(ShortcutAction.CycleModes)
+        // Left bud refuses 17 -> automatically falls back to VOICE_ASSISTANT (1) for Earshot hold interception.
+        sync.applySecondaryAction(0x04, ShortcutAction.CycleModes)
+
+        assertEquals(
+            listOf(
+                0x03 to ButtonAction.MODES_CAROUSEL,
+                0x04 to ButtonAction.MODES_CAROUSEL,
+                0x04 to ButtonAction.VOICE_ASSISTANT,
+            ),
+            repoWithCarouselRefusal.attempts,
+        )
+        assertEquals(ButtonAction.VOICE_ASSISTANT, buds.state.value.allShortcutButtons.first { it.buttonId == 0x04 }.action)
+    }
 }

@@ -14,6 +14,11 @@ import kotlinx.serialization.json.Json
  */
 @Serializable
 sealed interface ShortcutAction {
+    /** Cycle through the user's chosen listening modes (Quiet, Aware, Immersion, Cinema, BTD 700 Mode). */
+    @Serializable
+    @SerialName("cycle_modes")
+    data object CycleModes : ShortcutAction
+
     /** Step to the next Pro EQ preset (turning the Pro EQ on when it is off). */
     @Serializable
     @SerialName("cycle_eq")
@@ -48,7 +53,7 @@ sealed interface ShortcutAction {
     data class HeadphoneButton(val mode: Int) : ShortcutAction
 }
 
-/** True for the actions Earshot runs itself (they need the headset's button on "Voice assistant"). */
+/** True for the actions Earshot runs itself (they need the headset's button on "Voice assistant" or cycle modes fallback). */
 val ShortcutAction.isEarshotAction: Boolean get() = this !is ShortcutAction.HeadphoneButton
 
 /** A per-headset choice, keyed by Bluetooth address; [name] is only for display. */
@@ -73,6 +78,10 @@ data class ShortcutSettings(
     val detected: List<DetectedShortcut> = emptyList(),
     /** Modes picked for Bose buttons after the first (earbuds: the other bud). */
     val buttonChoices: List<ButtonChoice> = emptyList(),
+    /** Independent Earshot / hardware actions for any button id (e.g. Right 0x03, Left 0x04). */
+    val buttonActions: List<ButtonActionEntry> = emptyList(),
+    /** Ordered listening modes rotated when holding either earbud on Cycle Listening Modes. */
+    val modeCycle: List<CycleModeOption> = ModeCyclePolicy.DEFAULT_CYCLE_MODES,
 ) {
     /** The user picked something for the headset at [address] (or changed the default) rather than leaving the factory default. */
     fun hasExplicitChoice(address: String?): Boolean = overrideFor(address) != null || defaultAction != FACTORY_DEFAULT
@@ -122,6 +131,36 @@ data class ShortcutSettings(
         return copy(buttonChoices = if (mode == null) rest else rest + ButtonChoice(address.uppercase(), buttonId, mode))
     }
 
+    fun buttonActionFor(address: String?, buttonId: Int): ShortcutAction? =
+        address?.let { a -> buttonActions.firstOrNull { it.address.equals(a, ignoreCase = true) && it.buttonId == buttonId }?.action }
+
+    fun buttonActionsFor(address: String?): List<ButtonActionEntry> =
+        address?.let { a -> buttonActions.filter { it.address.equals(a, ignoreCase = true) } } ?: emptyList()
+
+    /** Stores an independent [ShortcutAction] for [buttonId] (e.g. Right 0x03 or Left 0x04) of [address]. */
+    fun withButtonAction(address: String, buttonId: Int, action: ShortcutAction?): ShortcutSettings {
+        val rest = buttonActions.filterNot { it.address.equals(address, ignoreCase = true) && it.buttonId == buttonId }
+        return copy(buttonActions = if (action == null) rest else rest + ButtonActionEntry(address.uppercase(), buttonId, action))
+    }
+
+    /** Updates the persisted mode-cycle list (always keeping at least [ModeCyclePolicy.MIN_MODES]). */
+    fun withModeCycle(modes: List<CycleModeOption>): ShortcutSettings =
+        copy(modeCycle = ModeCyclePolicy.normalize(modes))
+
+    /**
+     * Resolves what action Android's HFP / wired press trigger should run for [address].
+     * When the primary button is on a native headphone mode (e.g. Immersive Audio / Off), falls
+     * back to any secondary button configured for an Earshot action (e.g. Left Earbud = Cycle Modes).
+     */
+    fun triggerActionFor(address: String?): ShortcutAction {
+        val primary = actionFor(address)
+        if (primary.isEarshotAction && primary != FACTORY_DEFAULT) return primary
+        val secondaryEarshot = buttonActionsFor(address)
+            .firstOrNull { it.action.isEarshotAction && it.action != FACTORY_DEFAULT }
+            ?.action
+        return secondaryEarshot ?: primary
+    }
+
     companion object {
         val FACTORY_DEFAULT: ShortcutAction = ShortcutAction.OpenAssistant()
     }
@@ -144,6 +183,8 @@ object ShortcutCodec {
         seenHeadsetPress: Boolean?,
         detected: String? = null,
         buttonChoices: String? = null,
+        buttonActions: String? = null,
+        modeCycle: String? = null,
     ): ShortcutSettings {
         val defaults = ShortcutSettings()
         return ShortcutSettings(
@@ -155,6 +196,8 @@ object ShortcutCodec {
             seenHeadsetPress = seenHeadsetPress ?: defaults.seenHeadsetPress,
             detected = ShortcutExtrasCodec.decodeDetected(detected),
             buttonChoices = ShortcutExtrasCodec.decodeButtonChoices(buttonChoices),
+            buttonActions = ShortcutExtrasCodec.decodeButtonActions(buttonActions),
+            modeCycle = ShortcutExtrasCodec.decodeModeCycle(modeCycle),
         )
     }
 

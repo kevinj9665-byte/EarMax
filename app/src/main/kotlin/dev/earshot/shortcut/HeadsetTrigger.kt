@@ -21,7 +21,10 @@ object HeadsetTrigger {
      * button then sends no voice request.
      */
     fun needed(settings: ShortcutSettings, detecting: Boolean): Boolean =
-        detecting || settings.defaultAction.needsTrigger() || settings.overrides.any { it.action.needsTrigger() }
+        detecting ||
+            settings.defaultAction.needsTrigger() ||
+            settings.overrides.any { it.action.needsTrigger() } ||
+            settings.buttonActions.any { it.action.needsTrigger() }
 
     private fun ShortcutAction.needsTrigger(): Boolean = isEarshotAction && this != ShortcutSettings.FACTORY_DEFAULT
 
