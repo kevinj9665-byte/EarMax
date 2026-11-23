@@ -2,6 +2,7 @@ package dev.earshot.core.fake
 
 import dev.earshot.core.AppPreferences
 import dev.earshot.core.AppSoundProfile
+import dev.earshot.core.AudioOutputRoute
 import dev.earshot.core.AudioTuningRepository
 import dev.earshot.core.AutomationRepository
 import dev.earshot.core.AutomationRule
@@ -19,6 +20,7 @@ import dev.earshot.core.MicCheckState
 import dev.earshot.core.PrivilegeState
 import dev.earshot.core.TuningState
 import dev.earshot.dsp.BuiltInPresets
+import dev.earshot.dsp.EqBandMode
 import dev.earshot.dsp.EqPreset
 import dev.earshot.dsp.ParametricBand
 import dev.earshot.dsp.TuningSettings
@@ -31,7 +33,12 @@ class FakeAudioTuningRepository : AudioTuningRepository {
     private val _presets = MutableStateFlow(BuiltInPresets.all)
     override val presets: StateFlow<List<EqPreset>> = _presets
 
-    private val _state = MutableStateFlow(TuningState())
+    private val _state = MutableStateFlow(
+        TuningState(
+            outputRoute = AudioOutputRoute.BLUETOOTH_A2DP,
+            isExternalOutputConnected = true,
+        ),
+    )
     override val state: StateFlow<TuningState> = _state
 
     private val _appProfiles = MutableStateFlow<List<AppSoundProfile>>(emptyList())
@@ -57,12 +64,40 @@ class FakeAudioTuningRepository : AudioTuningRepository {
     override suspend fun setBands(bands: List<ParametricBand>) =
         _state.update { it.copy(activePreset = null, settings = it.settings.copy(activePresetId = null, bands = bands)) }
 
+    override suspend fun setBandMode(mode: EqBandMode) = _state.update { cur ->
+        val s = cur.settings
+        val saved = s.bandModeGains[mode]?.takeIf { it.size == mode.bandCount } ?: mode.sampleGainsFrom(s.bands)
+        val updatedGains = s.bandModeGains + (mode to saved)
+        cur.copy(
+            activePreset = null,
+            settings = s.copy(
+                activePresetId = null,
+                bandMode = mode,
+                bandModeGains = updatedGains,
+                bands = mode.bandsFromGains(saved),
+            ),
+        )
+    }
+
+    override suspend fun setBandModeGains(mode: EqBandMode, gainsDb: List<Double>) = _state.update { cur ->
+        val s = cur.settings
+        val clean = gainsDb.take(mode.bandCount).let { list ->
+            if (list.size == mode.bandCount) list else List(mode.bandCount) { i -> list.getOrElse(i) { 0.0 } }
+        }
+        cur.copy(
+            activePreset = null,
+            settings = s.copy(
+                activePresetId = null,
+                bandMode = mode,
+                bandModeGains = s.bandModeGains + (mode to clean),
+                bands = mode.bandsFromGains(clean),
+            ),
+        )
+    }
+
     override suspend fun setPreamp(db: Double) = _state.update { it.copy(settings = it.settings.copy(preampDb = db)) }
     override suspend fun setBoost(db: Double) = _state.update { it.copy(settings = it.settings.copy(boostDb = db)) }
     override suspend fun setLimiter(enabled: Boolean) = _state.update { it.copy(settings = it.settings.copy(limiterEnabled = enabled)) }
-    override suspend fun setWindCut(enabled: Boolean) = _state.update {
-        it.copy(settings = it.settings.copy(windCutEnabled = enabled, enabled = if (enabled) true else it.settings.enabled))
-    }
     override suspend fun restoreSettings(settings: TuningSettings) = _state.update {
         it.copy(
             activePreset = _presets.value.firstOrNull { p -> p.id == settings.activePresetId },

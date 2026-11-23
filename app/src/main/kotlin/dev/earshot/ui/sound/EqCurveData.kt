@@ -4,7 +4,6 @@ import androidx.compose.runtime.Immutable
 import dev.earshot.dsp.EqResponse
 import dev.earshot.dsp.Headroom
 import dev.earshot.dsp.ParametricBand
-import dev.earshot.dsp.WindBlockFilter
 import kotlin.math.ceil
 import kotlin.math.max
 
@@ -17,7 +16,6 @@ import kotlin.math.max
 data class EqCurveData(
     val bands: List<ParametricBand>,
     val preampDb: Double,
-    val windCutEnabled: Boolean = false,
 ) {
     /** [CURVE_POINTS] log-spaced (hz, dB) points over 20 Hz..20 kHz, preamp included. */
     val samples: List<Pair<Double, Double>>
@@ -29,8 +27,7 @@ data class EqCurveData(
     val bandPeakDb: Double
 
     init {
-        val activeBands = WindBlockFilter.effectiveBands(bands, windCutEnabled)
-        val response = EqResponse(activeBands, preampDb)
+        val response = EqResponse(bands, preampDb)
         samples = response.sample(CURVE_POINTS, EqCurve.MIN_HZ, EqCurve.MAX_HZ).map { it.frequencyHz to it.gainDb }
         markers = bands.filter { it.enabled }.map { it.frequencyHz to response.magnitudeDb(it.frequencyHz) }
         // The bands-only peak ignores the preamp, so this response gives Headroom's number as it is.

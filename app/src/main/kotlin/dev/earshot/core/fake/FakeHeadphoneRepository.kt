@@ -140,6 +140,11 @@ class FakeHeadphoneRepository(
         command { it.copy(noise = settings) }
     }
 
+    override suspend fun setActiveSense(enabled: Boolean) {
+        requireConnected()
+        command { it.copy(activeSenseEnabled = enabled) }
+    }
+
     override suspend fun setEq(eq: HeadphoneEq) { requireConnected(); command { it.copy(eq = eq) } }
 
     override suspend fun setSidetone(level: Sidetone, persistent: Boolean) {
@@ -383,8 +388,9 @@ class FakeHeadphoneRepository(
                 battery = BatteryDetail(overall = BatteryLevel(72, minutesLeft = 17 * 60)),
                 autoOffMinutes = 20,
                 eqRange = -10..10,
+                activeSenseEnabled = false,
                 // The QC Ultra 2 is the model Earshot runs on for real: previews show the Tested tier.
-                capabilities = HeadphoneCapabilities(tested = true),
+                capabilities = HeadphoneCapabilities(tested = true, activeSense = true),
             )
         }
 
@@ -410,7 +416,8 @@ class FakeHeadphoneRepository(
                     family = "QuietComfort Ultra Earbuds",
                     generation = "2nd Gen",
                 ),
-                capabilities = HeadphoneCapabilities(formFactor = FormFactor.EARBUDS),
+                capabilities = HeadphoneCapabilities(formFactor = FormFactor.EARBUDS, windBlock = false, activeSense = true),
+                activeSenseEnabled = false,
                 shortcutButton = null,
                 touchControlsEnabled = true,
                 autoOffMinutes = null,

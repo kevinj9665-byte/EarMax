@@ -79,7 +79,8 @@ class EarshotApp : Application() {
         container.shortcuts
         // Each headset gets its own Pro EQ preset back when it connects.
         container.headsetEq.start()
-        // 2nd Gen Ultra Earbuds: persist custom Pro EQ, Software Wind Block, and listening/spatial mode across reconnects.
+        // 2nd Gen Ultra Earbuds: persist custom Pro EQ, BTD 700 Mode, ActiveSense, and listening/spatial mode across reconnects.
+        (container.tuning as? dev.earshot.audio.AudioTuningRepositoryImpl)?.bindBtd700Mode(container.earbudState.btd700ModeActive)
         container.earbudState.start()
         // The diagnostics timeline records from process start (HFP, pairing, encryption, codec).
         container.timeline.start()

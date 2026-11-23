@@ -27,7 +27,7 @@ class HomeViewModel(
 ) : EarshotViewModel(messenger) {
 
     val state: StateFlow<HeadphoneState> = headphones.state
-    val softwareWindBlock: StateFlow<Boolean> = earbudState?.windBlockActive ?: MutableStateFlow(false)
+    val btd700Mode: StateFlow<Boolean> = earbudState?.btd700ModeActive ?: MutableStateFlow(false)
     val debugEntries: StateFlow<List<BtDebugLog.Entry>> = BtDebugLog.entries
 
     init {
@@ -68,8 +68,16 @@ class HomeViewModel(
         earbudState?.recordNoiseChange(settings)
     }
 
-    fun setSoftwareWindBlock(enabled: Boolean) = launchCatching {
-        earbudState?.setWindBlockEnabled(enabled)
+    fun setBtd700Mode(enabled: Boolean) = launchCatching {
+        earbudState?.setBtd700ModeEnabled(enabled)
+    }
+
+    fun setActiveSense(enabled: Boolean) = launchCatching {
+        if (earbudState != null) {
+            earbudState.setActiveSenseEnabled(enabled)
+        } else {
+            headphones.setActiveSense(enabled)
+        }
     }
 
     fun setVendorControl(id: String, value: Int) = launchCatching { headphones.setVendorControl(id, value) }

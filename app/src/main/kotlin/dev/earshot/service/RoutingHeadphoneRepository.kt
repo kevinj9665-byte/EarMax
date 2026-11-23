@@ -200,6 +200,7 @@ class RoutingHeadphoneRepository(
     override suspend fun saveCustomMode(index: Int, name: String, settings: NoiseSettings) = current.saveCustomMode(index, name, settings)
     override suspend fun setFavorites(indices: Set<Int>) = current.setFavorites(indices)
     override suspend fun setNoise(settings: NoiseSettings) = current.setNoise(settings)
+    override suspend fun setActiveSense(enabled: Boolean) = current.setActiveSense(enabled)
     override suspend fun setEq(eq: HeadphoneEq) = current.setEq(eq)
     override suspend fun setSidetone(level: Sidetone, persistent: Boolean) = current.setSidetone(level, persistent)
     override suspend fun setAutoPlayPause(enabled: Boolean) = current.setAutoPlayPause(enabled)

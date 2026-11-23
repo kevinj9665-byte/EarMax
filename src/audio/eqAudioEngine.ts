@@ -1,17 +1,20 @@
 import { TuningSettings } from '../types/earshot';
+import { planTwoStageBoost, SUB_BASS_CUTOFF_HZ } from '../dsp/earmaxLogic';
 
 /**
- * Live Web Audio API audition engine for Earshot's Pro EQ.
- * Plays either a built-in warm harmonic synth reference track or a user-loaded audio track
- * through a live BiquadFilterNode chain + Preamp + Limiter + Boost so every EQ band change is audible.
+ * Live Web Audio API audition engine for EarMax Pro EQ.
+ * Implements a clean two-stage Volume Boost chain:
+ *  - Stage 1: Parametric / multi-band EQ + sub-bass (<55 Hz) trim + upward boost gain
+ *  - Stage 2: High-headroom brickwall limiter (-0.5 dBFS / 10:1) preventing clipping
  */
 class EqAudioEngine {
   private ctx: AudioContext | null = null;
   private isPlaying = false;
   private preampNode: GainNode | null = null;
   private filterNodes: BiquadFilterNode[] = [];
-  private limiterNode: DynamicsCompressorNode | null = null;
+  private subBassTrimNode: BiquadFilterNode | null = null;
   private boostNode: GainNode | null = null;
+  private limiterNode: DynamicsCompressorNode | null = null;
   private synthTimer: number | null = null;
   private customBuffer: AudioBuffer | null = null;
   private customSource: AudioBufferSourceNode | null = null;
@@ -58,7 +61,6 @@ class EqAudioEngine {
       return;
     }
 
-    // Warm full-spectrum reference chord & bass pulse so bass, mid, and treble EQ edits are clearly heard
     const chords = [
       [110, 220, 329.63, 440, 659.25],
       [98, 196, 293.66, 392, 587.33],
@@ -95,7 +97,6 @@ class EqAudioEngine {
         osc.stop(t + 1.6);
       });
 
-      // Crisp hi-hat tick every half-beat so high-shelf / 8-16 kHz adjustments stand out
       [0, 0.4, 0.8, 1.2].forEach((offset) => {
         if (!this.ctx || !this.preampNode) return;
         const len = Math.floor(this.ctx.sampleRate * 0.045);
@@ -129,11 +130,14 @@ class EqAudioEngine {
     try {
       this.preampNode?.disconnect();
       this.filterNodes.forEach((f) => f.disconnect());
-      this.limiterNode?.disconnect();
+      this.subBassTrimNode?.disconnect();
       this.boostNode?.disconnect();
+      this.limiterNode?.disconnect();
     } catch {
       // ignore
     }
+
+    const boostPlan = planTwoStageBoost(tuning.enabled ? tuning.boostDb : 0, tuning.limiterEnabled);
 
     const preamp = ctx.createGain();
     preamp.gain.value = tuning.enabled ? Math.pow(10, tuning.preampDb / 20) : 1;
@@ -152,29 +156,38 @@ class EqAudioEngine {
       }
     }
 
+    // Stage 1: Progressive sub-bass (< 55 Hz) trim + upward makeup gain
+    const subTrim = ctx.createBiquadFilter();
+    subTrim.type = 'lowshelf';
+    subTrim.frequency.value = SUB_BASS_CUTOFF_HZ;
+    subTrim.Q.value = 0.707;
+    subTrim.gain.value = tuning.enabled ? boostPlan.subBassPreGainDb : 0;
+
+    const boost = ctx.createGain();
+    boost.gain.value = tuning.enabled ? Math.pow(10, boostPlan.makeupGainDb / 20) : 1;
+
+    // Stage 2: High-headroom brickwall limiter (-0.5 dBFS / 10:1)
     const limiter = ctx.createDynamicsCompressor();
-    if (tuning.limiterEnabled) {
-      limiter.threshold.value = -1.5;
-      limiter.knee.value = 2;
-      limiter.ratio.value = 18;
-      limiter.attack.value = 0.002;
-      limiter.release.value = 0.08;
+    if (boostPlan.limiter.enabled) {
+      limiter.threshold.value = boostPlan.limiter.thresholdDb;
+      limiter.knee.value = 3;
+      limiter.ratio.value = boostPlan.limiter.ratio;
+      limiter.attack.value = boostPlan.limiter.attackMs / 1000;
+      limiter.release.value = boostPlan.limiter.releaseMs / 1000;
     } else {
       limiter.threshold.value = 0;
       limiter.ratio.value = 1;
     }
-
-    const boost = ctx.createGain();
-    boost.gain.value = tuning.enabled ? Math.pow(10, tuning.boostDb / 20) : 1;
 
     let cursor: AudioNode = preamp;
     for (const f of filters) {
       cursor.connect(f);
       cursor = f;
     }
-    cursor.connect(limiter);
-    limiter.connect(boost);
-    boost.connect(ctx.destination);
+    cursor.connect(subTrim);
+    subTrim.connect(boost);
+    boost.connect(limiter);
+    limiter.connect(ctx.destination);
 
     if (this.customSource) {
       try {
@@ -187,8 +200,9 @@ class EqAudioEngine {
 
     this.preampNode = preamp;
     this.filterNodes = filters;
-    this.limiterNode = limiter;
+    this.subBassTrimNode = subTrim;
     this.boostNode = boost;
+    this.limiterNode = limiter;
   }
 
   stop() {
@@ -209,15 +223,17 @@ class EqAudioEngine {
     try {
       this.preampNode?.disconnect();
       this.filterNodes.forEach((f) => f.disconnect());
-      this.limiterNode?.disconnect();
+      this.subBassTrimNode?.disconnect();
       this.boostNode?.disconnect();
+      this.limiterNode?.disconnect();
     } catch {
       // ignore
     }
     this.preampNode = null;
     this.filterNodes = [];
-    this.limiterNode = null;
+    this.subBassTrimNode = null;
     this.boostNode = null;
+    this.limiterNode = null;
   }
 }
 

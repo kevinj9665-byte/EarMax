@@ -42,6 +42,9 @@ import dev.earshot.virtual.virtualProfile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -278,12 +281,20 @@ class AppContainer(private val appContext: Context) {
             },
         )
     }
-    val tuning: AudioTuningRepository by lazy { AudioTuningRepositoryImpl(appContext, applicationScope) }
+    val tuning: AudioTuningRepository by lazy {
+        AudioTuningRepositoryImpl(
+            appContext,
+            applicationScope,
+            controlLinkActive = headphones.state
+                .map { it.isConnected }
+                .stateIn(applicationScope, SharingStarted.Eagerly, headphones.state.value.isConnected),
+        )
+    }
 
     /** Pro EQ preset per headset, applied when that headset connects. Started by [EarshotApp]. */
     val headsetEq: HeadsetEqMemory by lazy { HeadsetEqMemory(appContext, headphones, tuning, applicationScope) }
 
-    /** Persistent Pro EQ sliders/presets, Software Wind Block & listening mode auto-restore for 2nd Gen earbuds. */
+    /** Persistent Pro EQ sliders/band mode/presets, BTD 700 Mode, ActiveSense & listening mode auto-restore for 2nd Gen earbuds. */
     val earbudState: dev.earshot.audio.EarbudStateCoordinator by lazy {
         dev.earshot.audio.EarbudStateCoordinator(appContext, headphones, tuning, applicationScope)
     }

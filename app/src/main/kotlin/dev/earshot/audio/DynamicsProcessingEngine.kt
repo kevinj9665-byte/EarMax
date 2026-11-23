@@ -279,20 +279,72 @@ private object AndroidEffects : SessionEffectFactory {
     private const val STEREO_CHANNELS = 2
 
     override fun create(sessionId: Int, bandCount: Int): SessionEffect {
-        val config = DynamicsProcessing.Config.Builder(
-            DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
-            STEREO_CHANNELS,
-            /* preEqInUse = */ false, /* preEqBandCount = */ 0,
-            /* mbcInUse = */ false, /* mbcBandCount = */ 0,
-            /* postEqInUse = */ true, /* postEqBandCount = */ bandCount,
-            /* limiterInUse = */ true,
-        ).build() // frame duration left at the framework default (variable / 10 ms)
-        return AndroidEffect(DynamicsProcessing(/* priority = */ 0, sessionId, config))
+        return try {
+            val config = DynamicsProcessing.Config.Builder(
+                DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
+                STEREO_CHANNELS,
+                /* preEqInUse = */ false, /* preEqBandCount = */ 0,
+                /* mbcInUse = */ true, /* mbcBandCount = */ DynamicsProcessingPlan.MBC_BAND_COUNT,
+                /* postEqInUse = */ true, /* postEqBandCount = */ bandCount,
+                /* limiterInUse = */ true,
+            ).build()
+            AndroidEffect(DynamicsProcessing(/* priority = */ 0, sessionId, config), hasMbc = true, mbcBandCount = DynamicsProcessingPlan.MBC_BAND_COUNT)
+        } catch (_: RuntimeException) {
+            // Some vendor HALs reject multi-band MBC + 32-band post-EQ; fall back to post-EQ + limiter so attach still succeeds.
+            val fallbackConfig = DynamicsProcessing.Config.Builder(
+                DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
+                STEREO_CHANNELS,
+                /* preEqInUse = */ false, /* preEqBandCount = */ 0,
+                /* mbcInUse = */ false, /* mbcBandCount = */ 0,
+                /* postEqInUse = */ true, /* postEqBandCount = */ bandCount,
+                /* limiterInUse = */ true,
+            ).build()
+            AndroidEffect(DynamicsProcessing(/* priority = */ 0, sessionId, fallbackConfig), hasMbc = false, mbcBandCount = 0)
+        }
     }
 }
 
-private class AndroidEffect(private val effect: DynamicsProcessing) : SessionEffect {
+private class AndroidEffect(
+    private val effect: DynamicsProcessing,
+    private val hasMbc: Boolean,
+    private val mbcBandCount: Int,
+) : SessionEffect {
     override fun apply(plan: Plan, enabled: Boolean) {
+        if (hasMbc && mbcBandCount > 0) {
+            if (plan.mbc.enabled && plan.mbc.bands.isNotEmpty()) {
+                val count = minOf(mbcBandCount, plan.mbc.bands.size)
+                for (i in 0 until count) {
+                    val b = plan.mbc.bands[i]
+                    effect.setMbcBandAllChannelsTo(
+                        i,
+                        DynamicsProcessing.MbcBand(
+                            /* enabled = */ true,
+                            b.cutoffHz.toFloat(),
+                            b.attackMs.toFloat(),
+                            b.releaseMs.toFloat(),
+                            b.ratio.toFloat(),
+                            b.thresholdDb.toFloat(),
+                            b.kneeWidthDb.toFloat(),
+                            b.noiseGateThresholdDb.toFloat(),
+                            b.expanderRatio.toFloat(),
+                            b.preGainDb.toFloat(),
+                            b.postGainDb.toFloat(),
+                        ),
+                    )
+                }
+            } else {
+                for (i in 0 until mbcBandCount) {
+                    effect.setMbcBandAllChannelsTo(
+                        i,
+                        DynamicsProcessing.MbcBand(
+                            /* enabled = */ false,
+                            DynamicsProcessingPlan.MAX_FREQ_HZ.toFloat(),
+                            5f, 80f, 1f, 0f, 0f, -90f, 1f, 0f, 0f,
+                        ),
+                    )
+                }
+            }
+        }
         plan.bands.forEachIndexed { i, band ->
             effect.setPostEqBandAllChannelsTo(
                 i,

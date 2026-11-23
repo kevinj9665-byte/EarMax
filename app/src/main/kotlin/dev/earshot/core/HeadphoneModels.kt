@@ -297,6 +297,8 @@ data class HeadphoneCapabilities(
     val ancAlwaysOn: Boolean = false,
     /** A Wind Block switch exists. The Crusher's modes have no separate wind setting. */
     val windBlock: Boolean = true,
+    /** Bose ActiveSense (auto-aware mode around loud noise, [1.29]). */
+    val activeSense: Boolean = false,
     /** Custom modes can be saved / renamed / reset. False where the write layout is unknown. */
     val editableModes: Boolean = true,
     /** Modes can be starred as favourites (the long-press on a mode chip). False on the Crusher. */
@@ -453,6 +455,8 @@ data class HeadphoneState(
     val leAudioSupported: Boolean? = null,
     /** `[1.37]` LE Audio switched on in the headphones. See [HeadphoneRepository.setLeAudioEnabled]. */
     val leAudioEnabled: Boolean? = null,
+    /** `[1.29]` Bose ActiveSense (AutoAwareMode) switched on in the earbuds/headphones. */
+    val activeSenseEnabled: Boolean? = null,
     /** `[4.19]` LE Audio check, read once per connection. Untested on hardware. */
     val lePreference: LeAudioPreference? = null,
     /** `[5.7]` current latency, milliseconds (unit inferred). Possibly a live measurement rather than a set-point. */

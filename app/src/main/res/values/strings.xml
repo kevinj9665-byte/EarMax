@@ -157,13 +157,19 @@
     <string name="noise_label_aware">Aware</string>
     <string name="noise_hint_anc_off">The level has no effect while noise cancelling is off.</string>
     <string name="noise_hint_wind_on">The level has no effect while Wind Block is on.</string>
+    <string name="noise_hint_btd700_locked">Noise cancelling is locked to 10 (Quiet) and ActiveSense is off while BTD 700 Mode is active.</string>
     <string name="noise_hint_mode_only">On these headphones noise settings belong to a mode. Switch to a custom mode to adjust them.</string>
     <string name="noise_hint_read_only">Shown for reference: this firmware doesn\'t let other apps change noise cancelling.</string>
     <string name="noise_anc">Noise cancelling</string>
     <string name="noise_anc_subtitle">Turn the cancelling microphones on or off</string>
+    <string name="noise_activesense">ActiveSense</string>
+    <string name="noise_activesense_subtitle">Automatically adjusts ANC around sudden loud sounds (BMAP 1.29)</string>
     <string name="noise_wind_block">Wind Block</string>
     <string name="noise_wind_block_subtitle">Cuts wind noise; overrides the level</string>
     <string name="noise_immersive">Immersive Audio</string>
+    <string name="home_btd700_title">BTD 700 Mode</string>
+    <string name="home_btd700_mode">Sennheiser BTD 700 USB-C Link</string>
+    <string name="home_btd700_subtitle">Unlocks USB aptX Lossless Pro EQ &amp; Boost, locks Quiet (NC 10), and sets ActiveSense Off</string>
 
     <!-- Home: now playing + status chips -->
     <string name="now_playing_title">Now playing</string>
@@ -240,8 +246,8 @@
     <string name="sound_boost_level">Boost</string>
     <string name="sound_boost_needs_pro_eq">Turn on Pro EQ to use volume boost.</string>
     <string name="sound_boost_warning">Hearing-safety warning: more than 6 dB of boost on top of a loud source can damage your hearing. Keep sessions short and the limiter on.</string>
-    <string name="sound_limiter">Limiter</string>
-    <string name="sound_limiter_subtitle">Stops the boost from clipping. Recommended.</string>
+    <string name="sound_limiter">Two-stage peak limiter</string>
+    <string name="sound_limiter_subtitle">Stage 1 sub-bass (&lt;55 Hz) headroom trim + Stage 2 soft-knee brickwall limiter (-0.5 dBFS / 10:1).</string>
     <string name="sound_boost_samsung_note">Samsung\'s own volume limiter (Sounds and vibration › Volume › Media volume limit) may cap the result.</string>
     <string name="sound_app_profiles">Per-app profiles</string>
     <string name="sound_app_profiles_subtitle">Pick a preset to apply automatically when an app plays.</string>
@@ -812,9 +818,14 @@
     <string name="memo_spoken_saved">Saved</string>
     <string name="memo_too_short">Voice memo too short, not saved</string>
 
-    <!-- 2nd Gen Ultra Earbuds: Software Wind Block & Live BT Debug Log -->
-    <string name="noise_software_wind_block_subtitle">Switches earbuds to Quiet (Max ANC) + cuts wind rumble below 100 Hz in Pro EQ</string>
-    <string name="sound_wind_cut_active">Software Wind Block is active: Pro EQ is attenuating wind rumble below 100 Hz while keeping your saved EQ curve intact.</string>
+    <!-- 2nd Gen Ultra Earbuds + Sennheiser BTD 700 & Live BT Debug Log -->
+    <string name="sound_band_mode_label">Graphic band layout</string>
+    <string name="sound_band_mode_bose_hint">Bose Style: Classic 3-Band EQ (Bass 60 Hz · Mid 1 kHz · Treble 8 kHz)</string>
+    <string name="sound_route_btd700">Output route: USB-C Audio · Sennheiser BTD 700 (Lossless DSP active)</string>
+    <string name="sound_route_usb">Output route: USB-C Audio DAC / Transmitter (Pro EQ &amp; Boost active)</string>
+    <string name="sound_route_bt">Output route: Bluetooth A2DP / LE Audio (Pro EQ &amp; Boost active)</string>
+    <string name="sound_route_bose_link">Output route: Bose Control Link (Pro EQ &amp; Boost active)</string>
+    <string name="sound_route_speaker">Output route: Phone speaker (Pro EQ paused)</string>
     <string name="bt_debug_title">Bluetooth debug log</string>
     <string name="bt_debug_subtitle">Raw UUIDs, GATT discovery &amp; BMAP hex frames (%1$d)</string>
     <string name="bt_debug_empty">No Bluetooth traffic captured yet. Connect earbuds to trace UUID discovery and BMAP hex frames.</string>

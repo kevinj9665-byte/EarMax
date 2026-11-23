@@ -373,6 +373,7 @@ class QcUltra2Protocol(
         }
         r.get(QcUltra2.DISABLE_CAPTOUCH) { s = s.copy(touchControlsEnabled = TouchControls.parseEnabled(it.payload)) }
         r.get(QcUltra2.LE_AUDIO_CONTROL) { s = s.copy(leAudioEnabled = LeAudioControl.parse(it.payload)) }
+        r.get(QcUltra2.AUTO_AWARE_MODE) { s = s.copy(activeSenseEnabled = Toggle.parse(it.payload)) }
 
         // AudioModes block. Every step re-checks modesAvailable: the first FblockNotSupp on block 31
         // ends the block for this connection (one ERROR, not one per function and refresh).
@@ -943,6 +944,9 @@ class QcUltra2Protocol(
     override suspend fun setAutoAnswer(c: BmapRequester, current: HeadphoneState, enabled: Boolean): HeadphoneState =
         current.copy(autoAnswer = setToggle(c, QcUltra2.AUTO_ANSWER, enabled))
 
+    override suspend fun setActiveSense(c: BmapRequester, current: HeadphoneState, enabled: Boolean): HeadphoneState =
+        current.copy(activeSenseEnabled = setToggle(c, QcUltra2.AUTO_AWARE_MODE, enabled))
+
     private suspend fun setToggle(c: BmapRequester, address: FunctionAddress, enabled: Boolean): Boolean {
         requireDriven()
         val echo = c.setGet(address, Toggle.build(enabled))
@@ -1243,6 +1247,7 @@ class QcUltra2Protocol(
                 QcUltra2.SIDETONE -> SidetoneCodec.parse(p)?.let { current.copy(sidetone = it.toSidetone(), sidetonePersistent = it.persist) }
                 QcUltra2.AUTO_PLAY_PAUSE -> Toggle.parse(p)?.let { current.copy(autoPlayPause = it) }
                 QcUltra2.AUTO_ANSWER -> Toggle.parse(p)?.let { current.copy(autoAnswer = it) }
+                QcUltra2.AUTO_AWARE_MODE -> Toggle.parse(p)?.let { current.copy(activeSenseEnabled = it) }
                 QcUltra2.MULTIPOINT -> Multipoint.parse(p)?.let { current.copy(multipointEnabled = it) }
                 QcUltra2.VOICE_PROMPTS -> VoicePromptsCodec.parse(p)?.let { current.copy(voicePrompts = it.toVoicePrompts()) }
                 QcUltra2.BUTTONS -> Buttons.parse(p)?.let { current.withButtonRecord(it.toButtonAssignment()) }

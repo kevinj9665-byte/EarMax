@@ -164,6 +164,8 @@ class ServiceHeadphoneRepository internal constructor(
 
     override suspend fun setNoise(settings: NoiseSettings) = command("setNoise") { c, s -> protocol.setNoise(c, s, settings) }
 
+    override suspend fun setActiveSense(enabled: Boolean) = command("setActiveSense") { c, s -> protocol.setActiveSense(c, s, enabled) }
+
     override suspend fun setEq(eq: HeadphoneEq) = command("setEq") { c, s -> protocol.setEq(c, s, eq) }
 
     override suspend fun setSidetone(level: Sidetone, persistent: Boolean) =

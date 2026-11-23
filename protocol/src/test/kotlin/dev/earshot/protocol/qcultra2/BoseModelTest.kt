@@ -144,6 +144,8 @@ class BoseModelTest {
         }
         assertEquals(ModeLayout.STANDARD, BoseModel.QC_ULTRA_EARBUDS_2.modeLayout)
         assertTrue(BoseModel.QC_ULTRA_EARBUDS_2.verified)
+        assertTrue(BoseModel.QC_ULTRA_EARBUDS_2.hasActiveSense)
+        assertTrue(BoseModel.QC_ULTRA_2.hasActiveSense)
         assertFalse(BoseModel.QC_ULTRA_EARBUDS.verified)
         assertFalse(BoseModel.ULTRA_OPEN_EARBUDS.canEditModes)
         assertFalse(BoseModel.ULTRA_OPEN_EARBUDS.hasNoiseCancelling)

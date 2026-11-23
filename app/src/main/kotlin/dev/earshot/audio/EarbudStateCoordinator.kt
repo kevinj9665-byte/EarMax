@@ -63,25 +63,24 @@ internal fun NoiseSettings.toSnapshot(): NoiseSnapshot = NoiseSnapshot(
 
 @Serializable
 internal data class PersistedEarbudState(
-    val windBlockActive: Boolean = false,
-    val preWindModeIndex: Int? = null,
-    val preWindNoise: NoiseSnapshot? = null,
-    val preWindTuning: TuningSettings? = null,
+    val btd700ModeActive: Boolean = false,
+    val activeSenseEnabled: Boolean? = null,
     val lastModeIndex: Int? = null,
     val lastNoise: NoiseSnapshot? = null,
     val lastTuning: TuningSettings? = null,
 )
 
 /**
- * Coordinates persistent state, Software Wind Block, and automatic reconnect restoration for the
- * Bose QuietComfort Ultra Earbuds (2nd Gen):
+ * Coordinates persistent state, BTD 700 Mode, Bose ActiveSense policy, and automatic reconnect
+ * restoration for the Bose QuietComfort Ultra Earbuds (2nd Gen):
  *
- * 1. Persists custom Pro EQ slider settings, active AutoEq preset, Software Wind Block state, and
- *    last-used listening mode / Bose Immersive Audio preference (Off / Still / Motion) in DataStore.
- * 2. Implements Software Wind Block: engaging it snapshots the active listening mode, noise/spatial
- *    settings, and Pro EQ configuration; switches earbuds to Quiet (Max ANC); and engages the
- *    < 100 Hz Pro EQ wind-rumble cut. Toggling it off restores the exact previous mode & EQ curve.
- * 3. Automatically re-applies persisted settings whenever the earbuds reconnect.
+ * 1. Persists custom Pro EQ slider settings, active band mode, AutoEq preset, Volume Boost,
+ *    BTD 700 Mode, ActiveSense state, and last-used listening / Immersive Audio mode in DataStore.
+ * 2. Enforces BTD 700 Mode: engaging it activates the USB-C aptX Lossless DSP audio path, locks
+ *    Noise Cancelling to 10 (Quiet), and forces ActiveSense OFF.
+ * 3. Defaults ActiveSense to OFF whenever Quiet mode or BTD 700 Mode is selected, while still
+ *    letting the user toggle ActiveSense manually via `[1.29] AutoAwareMode`.
+ * 4. Automatically re-applies persisted settings whenever the earbuds reconnect.
  */
 class EarbudStateCoordinator internal constructor(
     private val store: DataStore<Preferences>,
@@ -113,8 +112,8 @@ class EarbudStateCoordinator internal constructor(
     @Volatile
     private var state = PersistedEarbudState()
 
-    private val _windBlockActive = MutableStateFlow(false)
-    val windBlockActive: StateFlow<Boolean> = _windBlockActive.asStateFlow()
+    private val _btd700ModeActive = MutableStateFlow(false)
+    val btd700ModeActive: StateFlow<Boolean> = _btd700ModeActive.asStateFlow()
 
     fun start() {
         if (started) return
@@ -129,7 +128,7 @@ class EarbudStateCoordinator internal constructor(
             }
         }
 
-        // Persist Pro EQ slider & preset updates whenever the user changes them.
+        // Persist Pro EQ slider, band mode, preset, & Volume Boost updates whenever changed.
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             (tuning as? TuningRestore)?.awaitRestored()
             loaded.await()
@@ -140,18 +139,7 @@ class EarbudStateCoordinator internal constructor(
                 .collect { settings ->
                     if (restoring) return@collect
                     mutex.withLock {
-                        if (state.windBlockActive && settings.windCutEnabled) {
-                            // Keep underlying custom sliders/boost updates while Wind Block stays armed.
-                            val updatedBase = settings.copy(windCutEnabled = false)
-                            updateStateLocked {
-                                it.copy(
-                                    preWindTuning = updatedBase,
-                                    lastTuning = settings,
-                                )
-                            }
-                        } else if (!settings.windCutEnabled) {
-                            updateStateLocked { it.copy(lastTuning = settings) }
-                        }
+                        updateStateLocked { it.copy(lastTuning = settings) }
                     }
                 }
         }
@@ -170,40 +158,30 @@ class EarbudStateCoordinator internal constructor(
 
     /**
      * Records a user-initiated listening mode selection (Quiet / Aware / Immersion / Cinema / custom).
-     * If Software Wind Block was active and the user picks a different mode (e.g. Aware), Wind Block
-     * disengages and restores the saved EQ curve while honoring the newly selected mode.
+     * Switching to Quiet defaults ActiveSense to OFF; switching away from Quiet unlocks BTD 700 Mode
+     * if it was locking the slider, while persisting the new mode.
      */
     suspend fun recordModeSelection(index: Int) {
         loaded.await()
-        var restoreEq: TuningSettings? = null
+        val hp = headphones.state.value
+        val quietSlot = findQuietSlotIndex(hp)
+        val isQuiet = quietSlot != null && index == quietSlot
         mutex.withLock {
-            val quietSlot = findQuietSlotIndex(headphones.state.value)
-            val disengagingWind = state.windBlockActive && index != quietSlot
-            if (disengagingWind) {
-                restoreEq = state.preWindTuning ?: state.lastTuning?.copy(windCutEnabled = false)
-                updateStateLocked {
-                    it.copy(
-                        windBlockActive = false,
-                        preWindModeIndex = null,
-                        preWindNoise = null,
-                        preWindTuning = null,
-                        lastModeIndex = index,
-                        lastNoise = headphones.state.value.modes.firstOrNull { m -> m.index == index }?.settings?.toSnapshot()
-                            ?: it.lastNoise,
-                    )
-                }
-                _windBlockActive.value = false
-            } else {
-                val modeNoise = headphones.state.value.modes.firstOrNull { m -> m.index == index }?.settings?.toSnapshot()
-                updateStateLocked {
-                    it.copy(
-                        lastModeIndex = index,
-                        lastNoise = modeNoise ?: it.lastNoise,
-                    )
-                }
+            val modeNoise = hp.modes.firstOrNull { m -> m.index == index }?.settings?.toSnapshot()
+            val unlockBtd = !isQuiet && state.btd700ModeActive
+            updateStateLocked {
+                it.copy(
+                    btd700ModeActive = if (unlockBtd) false else it.btd700ModeActive,
+                    activeSenseEnabled = if (isQuiet) false else it.activeSenseEnabled,
+                    lastModeIndex = index,
+                    lastNoise = modeNoise ?: it.lastNoise,
+                )
             }
+            if (unlockBtd) _btd700ModeActive.value = false
         }
-        restoreEq?.let { eq -> tuning.restoreSettings(eq.copy(windCutEnabled = false)) }
+        if (isQuiet && hp.isConnected && hp.capabilities.activeSense) {
+            runCatching { headphones.setActiveSense(false) }
+        }
     }
 
     /**
@@ -211,82 +189,77 @@ class EarbudStateCoordinator internal constructor(
      */
     suspend fun recordNoiseChange(settings: NoiseSettings) {
         loaded.await()
-        var restoreEq: TuningSettings? = null
-        mutex.withLock {
-            val snap = settings.toSnapshot()
-            if (state.windBlockActive && (!settings.ancEnabled || settings.cancellingLevel < MAX_ANC_LEVEL)) {
-                restoreEq = state.preWindTuning ?: state.lastTuning?.copy(windCutEnabled = false)
-                updateStateLocked {
-                    it.copy(
-                        windBlockActive = false,
-                        preWindModeIndex = null,
-                        preWindNoise = null,
-                        preWindTuning = null,
-                        lastNoise = snap,
-                    )
-                }
-                _windBlockActive.value = false
-            } else if (state.windBlockActive) {
-                // Keep spatial audio toggle synced into the restore snapshot if changed during Wind Block.
-                updateStateLocked {
-                    it.copy(
-                        preWindNoise = (it.preWindNoise ?: snap).copy(spatialAudio = settings.spatialAudio),
-                        lastNoise = snap,
-                    )
-                }
+        val coerced = mutex.withLock {
+            val snap = if (state.btd700ModeActive) {
+                NoiseSnapshot(cancellingLevel = MAX_ANC_LEVEL, ancEnabled = true, spatialAudio = settings.spatialAudio)
             } else {
-                updateStateLocked { it.copy(lastNoise = snap) }
+                settings.toSnapshot()
+            }
+            updateStateLocked { it.copy(lastNoise = snap) }
+            snap
+        }
+        if (state.btd700ModeActive && (settings.cancellingLevel < MAX_ANC_LEVEL || !settings.ancEnabled)) {
+            val hp = headphones.state.value
+            if (hp.isConnected) {
+                runCatching { headphones.setNoise(coerced.toNoiseSettings(windBlock = false)) }
             }
         }
-        restoreEq?.let { eq -> tuning.restoreSettings(eq.copy(windCutEnabled = false)) }
     }
 
     /**
-     * Enables or disables Software Wind Block:
-     * - ON: captures current listening mode, noise settings, and Pro EQ configuration; switches earbuds
-     *   to Quiet (Max ANC); and engages the < 100 Hz Pro EQ wind-rumble cut.
-     * - OFF: restores the previous listening mode, noise/spatial settings, and Pro EQ curve.
+     * Direct ActiveSense toggle via Bose BMAP `[1.29] AutoAwareMode`, persisted across reconnects.
      */
-    suspend fun setWindBlockEnabled(enabled: Boolean) {
+    suspend fun setActiveSenseEnabled(enabled: Boolean) {
         loaded.await()
-        (tuning as? TuningRestore)?.awaitRestored()
-        if (enabled) enableWindBlock() else disableWindBlock()
+        val lockedByBtd = mutex.withLock { state.btd700ModeActive }
+        val target = if (lockedByBtd) false else enabled
+        mutex.withLock {
+            updateStateLocked { it.copy(activeSenseEnabled = target) }
+        }
+        val hp = headphones.state.value
+        if (hp.isConnected && hp.capabilities.activeSense) {
+            runCatching { headphones.setActiveSense(target) }
+        }
     }
 
-    private suspend fun enableWindBlock() {
-        val hpSnapshot = headphones.state.value
-        val curTuning = tuning.state.value.settings
-        val spatialForQuiet: SpatialAudio
+    /**
+     * Engages or releases BTD 700 Mode:
+     * - ON: unlocks USB-C aptX Lossless Pro EQ & Boost path, locks NC slider to 10 (Quiet), forces ActiveSense OFF.
+     * - OFF: releases BTD 700 USB DSP override and unlocks the Noise Cancelling slider.
+     */
+    suspend fun setBtd700ModeEnabled(enabled: Boolean) {
+        loaded.await()
+        (tuning as? TuningRestore)?.awaitRestored()
+        if (enabled) enableBtd700Mode() else disableBtd700Mode()
+    }
 
-        mutex.withLock {
-            if (!state.windBlockActive) {
-                val curMode = hpSnapshot.currentModeIndex ?: state.lastModeIndex
-                val curNoise = (hpSnapshot.noise ?: state.lastNoise?.toNoiseSettings())?.toSnapshot()
-                val baseTuning = if (curTuning.windCutEnabled) {
-                    state.preWindTuning ?: curTuning.copy(windCutEnabled = false)
-                } else {
-                    curTuning
-                }
-                updateStateLocked {
-                    it.copy(
-                        windBlockActive = true,
-                        preWindModeIndex = curMode,
-                        preWindNoise = curNoise,
-                        preWindTuning = baseTuning,
-                    )
-                }
-                _windBlockActive.value = true
+    private suspend fun enableBtd700Mode() {
+        val hpSnapshot = headphones.state.value
+        val spatialForQuiet = mutex.withLock {
+            val curNoise = (hpSnapshot.noise ?: state.lastNoise?.toNoiseSettings())?.toSnapshot()
+            val spatial = curNoise?.spatialAudio ?: SpatialAudio.OFF
+            val quietNoise = NoiseSnapshot(cancellingLevel = MAX_ANC_LEVEL, ancEnabled = true, spatialAudio = spatial)
+            val quietSlot = findQuietSlotIndex(hpSnapshot)
+            updateStateLocked {
+                it.copy(
+                    btd700ModeActive = true,
+                    activeSenseEnabled = false,
+                    lastModeIndex = quietSlot ?: it.lastModeIndex,
+                    lastNoise = quietNoise,
+                )
             }
-            spatialForQuiet = state.preWindNoise?.spatialAudio ?: hpSnapshot.noise?.spatialAudio ?: SpatialAudio.OFF
+            _btd700ModeActive.value = true
+            spatial
         }
 
-        // Engage < 100 Hz low-end wind-rumble cut via Pro EQ.
-        tuning.setWindCut(true)
+        // Enable phone-side Pro EQ DSP so Sennheiser BTD 700 lossless audio is tuned immediately.
+        if (!tuning.state.value.settings.enabled) {
+            tuning.setEnabled(true)
+        }
 
-        // Switch earbuds to Quiet (Max ANC).
         if (hpSnapshot.isConnected) {
             val quietSlot = findQuietSlotIndex(hpSnapshot)
-            if (quietSlot != null) {
+            if (quietSlot != null && hpSnapshot.currentModeIndex != quietSlot) {
                 runCatching { headphones.setMode(quietSlot) }
             }
             val latest = headphones.state.value
@@ -303,55 +276,22 @@ class EarbudStateCoordinator internal constructor(
                     )
                 }
             }
+            if (latest.capabilities.activeSense && latest.activeSenseEnabled != false) {
+                runCatching { headphones.setActiveSense(false) }
+            }
         }
     }
 
-    private suspend fun disableWindBlock() {
-        var restoreMode: Int? = null
-        var restoreNoise: NoiseSnapshot? = null
-        var restoreTuning: TuningSettings? = null
-
+    private suspend fun disableBtd700Mode() {
         mutex.withLock {
-            restoreMode = state.preWindModeIndex ?: state.lastModeIndex
-            restoreNoise = state.preWindNoise ?: state.lastNoise
-            restoreTuning = (state.preWindTuning ?: tuning.state.value.settings).copy(windCutEnabled = false)
-            updateStateLocked {
-                it.copy(
-                    windBlockActive = false,
-                    preWindModeIndex = null,
-                    preWindNoise = null,
-                    preWindTuning = null,
-                    lastModeIndex = restoreMode ?: it.lastModeIndex,
-                    lastNoise = restoreNoise ?: it.lastNoise,
-                    lastTuning = restoreTuning,
-                )
-            }
-            _windBlockActive.value = false
-        }
-
-        // Restore the user's custom Pro EQ sliders / AutoEq preset and remove < 100 Hz cut.
-        restoreTuning?.let { tuning.restoreSettings(it) } ?: tuning.setWindCut(false)
-
-        // Restore previous listening mode & noise/spatial settings if earbuds are connected.
-        val hpState = headphones.state.value
-        if (hpState.isConnected) {
-            val modeToApply = restoreMode?.takeIf { idx -> hpState.modes.any { it.index == idx && it.isConfigured } }
-            if (modeToApply != null) {
-                runCatching { headphones.setMode(modeToApply) }
-            }
-            val noiseToApply = restoreNoise
-            if (noiseToApply != null) {
-                val target = noiseToApply.toNoiseSettings(windBlock = false)
-                if (headphones.state.value.noise != target) {
-                    runCatching { headphones.setNoise(target) }
-                }
-            }
+            updateStateLocked { it.copy(btd700ModeActive = false) }
+            _btd700ModeActive.value = false
         }
     }
 
     /**
-     * Re-applies persisted Pro EQ sliders, active AutoEq preset, Wind Block state, and
-     * listening/immersive mode when 2nd Gen earbuds connect.
+     * Re-applies persisted Pro EQ sliders, band mode, AutoEq preset, boost level, BTD 700 Mode,
+     * ActiveSense state, and listening/immersive mode when 2nd Gen earbuds connect.
      */
     suspend fun restoreOnReconnect() {
         loaded.await()
@@ -363,22 +303,28 @@ class EarbudStateCoordinator internal constructor(
         restoring = true
         try {
             val savedTuning = snap.lastTuning
-            if (snap.windBlockActive) {
-                val base = (snap.preWindTuning ?: savedTuning ?: tuning.state.value.settings).copy(windCutEnabled = true, enabled = true)
-                tuning.restoreSettings(base)
+            if (savedTuning != null && savedTuning != tuning.state.value.settings) {
+                tuning.restoreSettings(savedTuning)
+            }
+            if (snap.btd700ModeActive) {
                 val quietSlot = findQuietSlotIndex(hp)
-                if (quietSlot != null) {
+                if (quietSlot != null && headphones.state.value.currentModeIndex != quietSlot) {
                     runCatching { headphones.setMode(quietSlot) }
                 }
-                val targetSpatial = snap.preWindNoise?.spatialAudio ?: SpatialAudio.OFF
-                val quietNoise = NoiseSettings(cancellingLevel = MAX_ANC_LEVEL, ancEnabled = true, windBlock = false, spatialAudio = targetSpatial)
+                val targetSpatial = snap.lastNoise?.spatialAudio ?: SpatialAudio.OFF
+                val quietNoise = NoiseSettings(
+                    cancellingLevel = MAX_ANC_LEVEL,
+                    ancEnabled = true,
+                    windBlock = false,
+                    spatialAudio = targetSpatial,
+                )
                 if (headphones.state.value.noise != quietNoise) {
                     runCatching { headphones.setNoise(quietNoise) }
                 }
-            } else {
-                if (savedTuning != null && savedTuning != tuning.state.value.settings) {
-                    tuning.restoreSettings(savedTuning)
+                if (hp.capabilities.activeSense) {
+                    runCatching { headphones.setActiveSense(false) }
                 }
+            } else {
                 val modeIndex = snap.lastModeIndex?.takeIf { idx -> hp.modes.any { it.index == idx && it.isConfigured } }
                 if (modeIndex != null && headphones.state.value.currentModeIndex != modeIndex) {
                     runCatching { headphones.setMode(modeIndex) }
@@ -386,6 +332,13 @@ class EarbudStateCoordinator internal constructor(
                 val noise = snap.lastNoise?.toNoiseSettings(windBlock = false)
                 if (noise != null && headphones.state.value.noise != noise) {
                     runCatching { headphones.setNoise(noise) }
+                }
+                if (hp.capabilities.activeSense) {
+                    val quietSlot = findQuietSlotIndex(hp)
+                    val targetActiveSense = if (modeIndex != null && modeIndex == quietSlot) false else snap.activeSenseEnabled
+                    if (targetActiveSense != null && headphones.state.value.activeSenseEnabled != targetActiveSense) {
+                        runCatching { headphones.setActiveSense(targetActiveSense) }
+                    }
                 }
             }
         } finally {
@@ -417,7 +370,7 @@ class EarbudStateCoordinator internal constructor(
             runCatching { json.decodeFromString<PersistedEarbudState>(raw) }.getOrNull()
         } ?: PersistedEarbudState()
         state = decoded
-        _windBlockActive.value = decoded.windBlockActive
+        _btd700ModeActive.value = decoded.btd700ModeActive
     }
 
     private suspend fun updateStateLocked(transform: (PersistedEarbudState) -> PersistedEarbudState) {

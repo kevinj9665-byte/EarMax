@@ -25,12 +25,12 @@ import dev.earshot.core.TuningState
 import dev.earshot.dsp.AppProfileRecord
 import dev.earshot.dsp.BuiltInPresets
 import dev.earshot.dsp.DynamicsProcessingPlan
+import dev.earshot.dsp.EqBandMode
 import dev.earshot.dsp.EqPreset
 import dev.earshot.dsp.Headroom
 import dev.earshot.dsp.ParametricBand
 import dev.earshot.dsp.PresetCodec
 import dev.earshot.dsp.TuningSettings
-import dev.earshot.dsp.WindBlockFilter
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -165,6 +165,7 @@ internal class SessionAging(
 class AudioTuningRepositoryImpl(
     context: Context,
     private val scope: CoroutineScope,
+    private val controlLinkActive: StateFlow<Boolean> = MutableStateFlow(false),
 ) : AudioTuningRepository, TuningRestore {
 
     private val appContext = context.applicationContext
@@ -191,20 +192,22 @@ class AudioTuningRepositoryImpl(
     /** Opt-in fallback for players that never broadcast their session. Not part of the contract. */
     val useGlobalSession: StateFlow<Boolean> = _useGlobalSession
 
-    private val bluetoothOutputPresent = MutableStateFlow(false)
-    /** Decides in [reconcile] which announced sessions are forgotten (a long Bluetooth loss, age). */
+    private val outputDeviceTypes = MutableStateFlow<Set<Int>>(emptySet())
+    private val btd700ModeActive = MutableStateFlow(false)
+    private var btd700BindJob: Job? = null
+    /** Decides in [reconcile] which announced sessions are forgotten (a long external output loss, age). */
     private val sessionAging = SessionAging(BT_LOSS_GRACE_MS, SESSION_MAX_AGE_MS, ATTACHED_SESSION_MAX_AGE_MS)
     private val mutex = Mutex()
     private val restored = CompletableDeferred<Unit>()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val deviceCallback = object : AudioDeviceCallback() {
-        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) = refreshBluetoothOutput()
-        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) = refreshBluetoothOutput()
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) = refreshAudioOutputs()
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) = refreshAudioOutputs()
     }
 
     init {
-        refreshBluetoothOutput()
+        refreshAudioOutputs()
         audioManager?.registerAudioDeviceCallback(deviceCallback, mainHandler)
 
         scope.launch {
@@ -213,13 +216,30 @@ class AudioTuningRepositoryImpl(
             // Anything that changes *which* sessions should carry an effect funnels into one reconcile.
             // A session opening is also a cheap moment to re-check the media route: the output
             // switcher doesn't fire the device callback, so this is what notices "This phone".
-            combine(SessionRegistry.sessions, bluetoothOutputPresent, _useGlobalSession) { s, bt, g -> Triple(s, bt, g) }
-                .collect { refreshBluetoothOutput(); mutex.withLock { reconcile() } }
+            combine(
+                SessionRegistry.sessions,
+                outputDeviceTypes,
+                btd700ModeActive,
+                controlLinkActive,
+                _useGlobalSession,
+            ) { s, devTypes, btd, link, g ->
+                listOf(s, devTypes, btd, link, g)
+            }.collect { refreshAudioOutputs(); mutex.withLock { reconcile() } }
         }
         scope.coroutineContext[Job]?.invokeOnCompletion {
+            btd700BindJob?.cancel()
             audioManager?.unregisterAudioDeviceCallback(deviceCallback)
             // Effects outlive us in the audio HAL if we don't release them explicitly.
             engine.detachAll()
+        }
+    }
+
+    /** Binds BTD 700 Mode state from [EarbudStateCoordinator] so USB-C lossless DSP stays engaged. */
+    fun bindBtd700Mode(flow: StateFlow<Boolean>) {
+        btd700BindJob?.cancel()
+        btd700ModeActive.value = flow.value
+        btd700BindJob = scope.launch {
+            flow.collect { active -> btd700ModeActive.value = active }
         }
     }
 
@@ -247,6 +267,33 @@ class AudioTuningRepositoryImpl(
     override suspend fun setBands(bands: List<ParametricBand>) =
         mutate { s -> s.copy(activePresetId = null, bands = bands.map(::sanitise)) }
 
+    override suspend fun setBandMode(mode: EqBandMode) = mutate { s ->
+        val gains = if (s.activePresetId == null) {
+            s.bandModeGains[mode]?.takeIf { it.size == mode.bandCount } ?: mode.sampleGainsFrom(s.bands)
+        } else {
+            mode.sampleGainsFrom(s.bands)
+        }
+        val clean = gains.map { it.coerceIn(ParametricBand.MIN_GAIN_DB, ParametricBand.MAX_GAIN_DB) }
+        s.copy(
+            activePresetId = null,
+            bandMode = mode,
+            bandModeGains = s.bandModeGains + (mode to clean),
+            bands = mode.bandsFromGains(clean),
+        )
+    }
+
+    override suspend fun setBandModeGains(mode: EqBandMode, gainsDb: List<Double>) = mutate { s ->
+        val clean = List(mode.bandCount) { i ->
+            gainsDb.getOrElse(i) { 0.0 }.coerceIn(ParametricBand.MIN_GAIN_DB, ParametricBand.MAX_GAIN_DB)
+        }
+        s.copy(
+            activePresetId = null,
+            bandMode = mode,
+            bandModeGains = s.bandModeGains + (mode to clean),
+            bands = mode.bandsFromGains(clean),
+        )
+    }
+
     override suspend fun setPreamp(db: Double) =
         mutate { s -> s.copy(preampDb = db.coerceIn(MIN_PREAMP_DB, 0.0)) }
 
@@ -256,9 +303,6 @@ class AudioTuningRepositoryImpl(
     override suspend fun setLimiter(enabled: Boolean) =
         // Turning the limiter off lowers the boost ceiling; re-clamp so we never run +12 dB unprotected.
         mutate { s -> s.copy(limiterEnabled = enabled, boostDb = Headroom.clampBoost(s.boostDb, enabled)) }
-
-    override suspend fun setWindCut(enabled: Boolean) =
-        mutate { s -> s.copy(windCutEnabled = enabled, enabled = if (enabled) true else s.enabled) }
 
     override suspend fun restoreSettings(settings: TuningSettings) =
         mutate {
@@ -358,8 +402,7 @@ class AudioTuningRepositoryImpl(
     /** What a session belonging to [packageName] should play through. */
     private fun plannerFor(settings: TuningSettings, packageName: String?): Planner {
         val profilePreset = profileFor(packageName)?.let { presetById(it.presetId) }
-        val rawBands = profilePreset?.bands ?: settings.bands
-        val bands = WindBlockFilter.effectiveBands(rawBands, settings.windCutEnabled)
+        val bands = profilePreset?.bands ?: settings.bands
         val limiter = settings.limiterEnabled
         // With the limiter off nothing catches peaks, so the preamp may not sit above what cancels
         // the bands' combined boost; the loudness boost is capped at +3 dB by clampBoost for the same reason.
@@ -374,18 +417,17 @@ class AudioTuningRepositoryImpl(
      */
     private suspend fun reconcile() {
         val settings = _state.value.settings
-        val btPresent = bluetoothOutputPresent.value
-        // Players the OS kills never send CLOSE. Losing the headphones for longer than a blip is the
-        // natural moment to forget every session (live players re-announce on their next start).
-        // Anything older than SESSION_MAX_AGE_MS is stale regardless, except a session that has
-        // carried our effect: an audiobook or sleep-sound app announces once and may play all night,
-        // and dropping its effect mid-playback changes its loudness (preamp, boost, limiter). That
-        // holds through a short Bluetooth drop too, when every effect is released (SessionAging).
-        // ATTACHED_SESSION_MAX_AGE_MS still bounds effects parked on sessions of players that died
-        // without CLOSE. Both are no-ops on the flow when nothing changes.
-        sessionAging.prune(btPresent, SystemClock.elapsedRealtime())
+        val routeResult = ExternalAudioRouteDetector.detect(
+            ExternalAudioRouteDetector.Snapshot(
+                outputDeviceTypes = outputDeviceTypes.value,
+                btd700ModeActive = btd700ModeActive.value,
+                controlLinkActive = controlLinkActive.value,
+            ),
+        )
+        val externalActive = routeResult.isExternalOutputActive
+        sessionAging.prune(externalActive, SystemClock.elapsedRealtime())
         val sessions = SessionRegistry.sessions.value
-        val shouldRun = settings.enabled && btPresent
+        val shouldRun = settings.enabled && externalActive
 
         val targets: Map<Int, Planner> = if (!shouldRun) emptyMap() else buildMap {
             for (s in sessions) put(s.sessionId, plannerFor(settings, s.packageName))
@@ -404,8 +446,8 @@ class AudioTuningRepositoryImpl(
             s.packageName?.takeIf { pkg -> s.sessionId in es.attachedSessions && profileFor(pkg) != null }
         }
         val warning = when {
-            settings.enabled && !btPresent ->
-                "No Bluetooth headphones connected — the EQ is paused so it doesn't colour the phone speaker."
+            settings.enabled && !externalActive ->
+                "Audio is routing through the phone speaker — Pro EQ and Volume Boost are paused."
             !es.isAvailable -> es.warning
             shouldRun && targets.isEmpty() ->
                 "Waiting for a music app to start playing. Apps that don't announce their audio session can't be tuned."
@@ -416,27 +458,28 @@ class AudioTuningRepositoryImpl(
                 attachedSessions = es.attachedSessions.size,
                 isAvailable = es.isAvailable,
                 activeAppPackage = activePackage,
+                outputRoute = routeResult.route,
+                isExternalOutputConnected = externalActive,
                 warning = warning,
             )
         }
     }
 
     /**
-     * Is *media* going to Bluetooth right now? On API 33+ we ask where USAGE_MEDIA is routed, so
-     * picking "This phone" in the output switcher (headphones still connected) detaches the EQ;
-     * older releases can only tell us whether a Bluetooth output exists at all.
+     * Snapshot Android media output device types (USB-C BTD 700, Bluetooth A2DP/BLE, or phone speaker).
      */
-    private fun refreshBluetoothOutput() {
+    private fun refreshAudioOutputs() {
         val am = audioManager ?: return
-        val present = runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val types = runCatching {
+            val devices = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 val media = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build()
-                am.getAudioDevicesForAttributes(media).any { it.type in BLUETOOTH_OUTPUT_TYPES }
+                am.getAudioDevicesForAttributes(media)
             } else {
-                am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { it.type in BLUETOOTH_OUTPUT_TYPES }
+                am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).toList()
             }
-        }.getOrDefault(false)
-        bluetoothOutputPresent.value = present
+            devices.mapTo(HashSet()) { it.type }
+        }.getOrDefault(emptySet())
+        outputDeviceTypes.value = types
     }
 
     // ---- persistence -----------------------------------------------------------------------
@@ -500,11 +543,5 @@ class AudioTuningRepositoryImpl(
         val KEY_PRESETS = stringPreferencesKey("user_presets_json")
         val KEY_PROFILES = stringPreferencesKey("app_profiles_json")
         val KEY_GLOBAL_SESSION = booleanPreferencesKey("use_global_session")
-
-        /** A2DP is the classic music profile; LE Audio headsets (Android 12+) count as headphones too. */
-        val BLUETOOTH_OUTPUT_TYPES: Set<Int> = buildSet {
-            add(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) add(AudioDeviceInfo.TYPE_BLE_HEADSET)
-        }
     }
 }

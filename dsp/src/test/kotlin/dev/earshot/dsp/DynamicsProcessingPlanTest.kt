@@ -80,12 +80,31 @@ class DynamicsProcessingPlanTest {
     }
 
     @Test
-    fun `limiter defaults are the documented protective values`() {
+    fun `limiter defaults are soft-knee brickwall protective values`() {
         val l = DynamicsProcessingPlan.plan(emptyList(), 0.0, 0.0, true).limiter
         assertEquals(1.0, l.attackMs, 1e-9)
         assertEquals(60.0, l.releaseMs, 1e-9)
-        assertEquals(50.0, l.ratio, 1e-9)
-        assertEquals(-2.0, l.thresholdDb, 1e-9)
+        assertEquals(10.0, l.ratio, 1e-9)
+        assertEquals(-0.5, l.thresholdDb, 1e-9)
         assertEquals(0.0, l.postGainDb, 1e-9)
+    }
+
+    @Test
+    fun `volume boost enables Stage 1 MBC with 5ms attack, 80ms release, and sub-bass trim`() {
+        val off = DynamicsProcessingPlan.plan(emptyList(), 0.0, 0.0, true).mbc
+        assertFalse(off.enabled)
+
+        val midBoost = DynamicsProcessingPlan.plan(emptyList(), 0.0, 6.0, true).mbc
+        val highBoost = DynamicsProcessingPlan.plan(emptyList(), 0.0, 12.0, true).mbc
+        assertTrue(midBoost.enabled && highBoost.enabled)
+        assertEquals(DynamicsProcessingPlan.MBC_BAND_COUNT, highBoost.bands.size)
+
+        val subLowMid = midBoost.bands.first()
+        val subHighBoost = highBoost.bands.first()
+        assertEquals(55.0, subHighBoost.cutoffHz, 1e-9)
+        assertEquals(5.0, subHighBoost.attackMs, 1e-9)
+        assertEquals(80.0, subHighBoost.releaseMs, 1e-9)
+        assertTrue(subLowMid.preGainDb < 0.0)
+        assertTrue(subHighBoost.preGainDb < subLowMid.preGainDb, "Higher boost tames sub-bass overload further")
     }
 }

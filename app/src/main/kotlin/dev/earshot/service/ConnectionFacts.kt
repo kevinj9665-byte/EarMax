@@ -98,6 +98,7 @@ internal data class ConnectionFacts(
             noiseCancelling = noiseCancelling,
             ancAlwaysOn = noiseCancelling && !ancToggle,
             windBlock = modal && noiseCancelling && model != BoseModel.QC_ULTRA_EARBUDS_2 && (modes?.windBlock ?: model.hasWindBlock) && (live || layout.hasWind),
+            activeSense = model.hasActiveSense,
             editableModes = canEditModes && modesAvailable,
             favoriteModes = modesAvailable && (modes?.favorites ?: true),
             listeningModes = modesAvailable,
@@ -112,7 +113,7 @@ internal data class ConnectionFacts(
     /** QC35 and the like: the battery and product info are read, nothing is written (the Battery only tier). */
     private fun unsupportedCapabilities() = HeadphoneCapabilities(
         spatialAudio = false, ancToggle = false, liveNoiseControl = false, noiseCancelling = false,
-        ancAlwaysOn = false, windBlock = false, editableModes = false, favoriteModes = false,
+        ancAlwaysOn = false, windBlock = false, activeSense = false, editableModes = false, favoriteModes = false,
         listeningModes = false, verified = false, formFactor = model.formFactor.toFormFactor(),
         supportNote = model.supportNote, batteryOnly = true,
     )

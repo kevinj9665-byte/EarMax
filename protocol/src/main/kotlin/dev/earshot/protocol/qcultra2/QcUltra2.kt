@@ -67,6 +67,8 @@ object QcUltra2 {
     val SETUP_COMPLETE = FunctionAddress(1, 12)
     val AUTO_PLAY_PAUSE = FunctionAddress(1, 24)
     val AUTO_ANSWER = FunctionAddress(1, 27)
+    /** Bose ActiveSense (Auto-Aware in Aware / transparency modes): `[1.29]` 1-byte toggle. */
+    val AUTO_AWARE_MODE = FunctionAddress(1, 29)
     val DISABLE_CAPTOUCH = FunctionAddress(1, 34)          // bit 0 = touch controls ON despite the name (Bose app; fw 10.12 reads 01)
     val LE_AUDIO_CONTROL = FunctionAddress(1, 37)          // [0|1]; writing it restarts the headphones
 

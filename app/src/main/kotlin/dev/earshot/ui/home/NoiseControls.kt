@@ -17,8 +17,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.earshot.R
-import dev.earshot.core.NoiseSettings
 import dev.earshot.core.HeadphoneCapabilities
+import dev.earshot.core.NoiseSettings
 import dev.earshot.core.SpatialAudio
 import dev.earshot.ui.common.DashedDivider
 import dev.earshot.ui.common.SegmentedChoice
@@ -27,13 +27,9 @@ import dev.earshot.ui.common.ValueSlider
 import kotlin.math.roundToInt
 
 /**
- * The [31.10] struct as controls: cancelling slider (10 = quietest), ANC, Wind Block, Immersive
- * Audio. Used by Home, the custom-mode editor and the automation editor. Stateless: every
- * gesture emits a whole [NoiseSettings] so the caller can send it in one SET_GET.
- *
- * [capabilities] hides what the connected model lacks: the ANC switch on the QC45 / QC
- * Headphones (level only), Immersive Audio on those too, and everything but Immersive Audio
- * on open-ear earbuds.
+ * The [31.10] struct as controls: cancelling slider (10 = quietest), ActiveSense, ANC,
+ * Wind Block (over-ear models), Immersive Audio. Used by Home, the custom-mode editor and the
+ * automation editor.
  */
 @Composable
 fun NoiseControls(
@@ -43,16 +39,16 @@ fun NoiseControls(
     modifier: Modifier = Modifier,
     compact: Boolean = false,
     capabilities: HeadphoneCapabilities = HeadphoneCapabilities(),
-    softwareWindBlock: Boolean? = null,
-    onSoftwareWindBlockChange: ((Boolean) -> Unit)? = null,
-    softwareWindBlockEnabled: Boolean = enabled,
+    activeSense: Boolean? = null,
+    onActiveSenseChange: ((Boolean) -> Unit)? = null,
+    activeSenseEnabled: Boolean = enabled,
+    btd700Locked: Boolean = false,
 ) {
-    // CNC is audible only while anc=1 and wind=0; when Software Wind Block is armed, earbuds are locked to Quiet (Max ANC).
     val ancOn = settings.ancEnabled || capabilities.ancAlwaysOn
-    val showSoftwareWindBlock = !capabilities.windBlock && softwareWindBlock != null && onSoftwareWindBlockChange != null
-    val windOn = settings.windBlock || (showSoftwareWindBlock && softwareWindBlock == true)
-    val levelHasEffect = ancOn && !windOn
-    var dragLevel by remember(settings.cancellingLevel) { mutableFloatStateOf(settings.cancellingLevel.toFloat()) }
+    val levelHasEffect = ancOn && !settings.windBlock && !btd700Locked
+    val effectiveLevel = if (btd700Locked) 10f else settings.cancellingLevel.toFloat()
+    var dragLevel by remember(settings.cancellingLevel, btd700Locked) { mutableFloatStateOf(effectiveLevel) }
+    val showActiveSense = capabilities.activeSense && activeSense != null && onActiveSenseChange != null
 
     Column(modifier.fillMaxWidth()) {
         if (capabilities.noiseCancelling) {
@@ -73,53 +69,57 @@ fun NoiseControls(
             )
             AnimatedVisibility(visible = !levelHasEffect) {
                 Text(
-                    stringResource(if (!ancOn) R.string.noise_hint_anc_off else R.string.noise_hint_wind_on),
+                    stringResource(
+                        when {
+                            btd700Locked -> R.string.noise_hint_btd700_locked
+                            !ancOn -> R.string.noise_hint_anc_off
+                            else -> R.string.noise_hint_wind_on
+                        },
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 4.dp),
                 )
             }
+            if (showActiveSense) {
+                SwitchRow(
+                    title = stringResource(R.string.noise_activesense),
+                    subtitle = if (compact) null else stringResource(R.string.noise_activesense_subtitle),
+                    checked = if (btd700Locked) false else activeSense == true,
+                    enabled = activeSenseEnabled,
+                    onCheckedChange = onActiveSenseChange,
+                )
+                if (capabilities.ancToggle || capabilities.windBlock) DashedDivider()
+            }
             if (compact) {
                 if (capabilities.ancToggle) SwitchRow(
                     title = stringResource(R.string.noise_anc),
                     checked = settings.ancEnabled,
-                    enabled = enabled,
+                    enabled = enabled && !btd700Locked,
                     onCheckedChange = { onChange(settings.copy(ancEnabled = it)) },
                 )
-                if (capabilities.ancToggle && (capabilities.windBlock || showSoftwareWindBlock)) DashedDivider()
+                if (capabilities.ancToggle && capabilities.windBlock) DashedDivider()
                 if (capabilities.windBlock) SwitchRow(
                     title = stringResource(R.string.noise_wind_block),
                     checked = settings.windBlock,
                     enabled = enabled,
                     onCheckedChange = { onChange(settings.copy(windBlock = it)) },
-                ) else if (showSoftwareWindBlock) SwitchRow(
-                    title = stringResource(R.string.noise_wind_block),
-                    subtitle = stringResource(R.string.noise_software_wind_block_subtitle),
-                    checked = softwareWindBlock == true,
-                    enabled = softwareWindBlockEnabled,
-                    onCheckedChange = { onSoftwareWindBlockChange(it) },
                 )
             } else {
                 if (capabilities.ancToggle) SwitchRow(
                     title = stringResource(R.string.noise_anc),
                     subtitle = stringResource(R.string.noise_anc_subtitle),
                     checked = settings.ancEnabled,
-                    enabled = enabled,
+                    enabled = enabled && !btd700Locked,
                     onCheckedChange = { onChange(settings.copy(ancEnabled = it)) },
                 )
-                if (capabilities.ancToggle && (capabilities.windBlock || showSoftwareWindBlock)) DashedDivider()
+                if (capabilities.ancToggle && capabilities.windBlock) DashedDivider()
                 if (capabilities.windBlock) SwitchRow(
                     title = stringResource(R.string.noise_wind_block),
                     subtitle = stringResource(R.string.noise_wind_block_subtitle),
                     checked = settings.windBlock,
                     enabled = enabled,
                     onCheckedChange = { onChange(settings.copy(windBlock = it)) },
-                ) else if (showSoftwareWindBlock) SwitchRow(
-                    title = stringResource(R.string.noise_wind_block),
-                    subtitle = stringResource(R.string.noise_software_wind_block_subtitle),
-                    checked = softwareWindBlock == true,
-                    enabled = softwareWindBlockEnabled,
-                    onCheckedChange = { onSoftwareWindBlockChange(it) },
                 )
             }
         }

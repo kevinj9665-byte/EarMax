@@ -46,6 +46,8 @@ interface HeadphoneRepository {
     suspend fun setAncEnabled(enabled: Boolean) = setNoise(requireNoise().copy(ancEnabled = enabled))
     suspend fun setWindBlock(enabled: Boolean) = setNoise(requireNoise().copy(windBlock = enabled))
     suspend fun setSpatialAudio(mode: SpatialAudio) = setNoise(requireNoise().copy(spatialAudio = mode))
+    /** Bose ActiveSense (`[1.29]` AutoAwareMode). */
+    suspend fun setActiveSense(enabled: Boolean): Unit = unsupported()
 
     // ---- Settings block --------------------------------------------------------------------
 

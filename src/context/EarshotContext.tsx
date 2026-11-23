@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AppearanceMode,
+  AudioOutputRoute,
   AutomationLogEntry,
   AutomationRule,
   ButtonActionId,
@@ -8,6 +9,7 @@ import {
   CodecState,
   CodecType,
   CustomSound,
+  EqBandMode,
   EqPreset,
   HeadphoneState,
   LabReading,
@@ -28,6 +30,14 @@ import {
   TuningSettings,
 } from '../types/earshot';
 import { BUILT_IN_PRESETS, makeGraphicBands } from '../dsp/presets';
+import {
+  applyBtd700ModeTransition,
+  applyListeningModePolicy,
+  detectExternalAudioRoute,
+  EQ_BAND_MODE_CONFIGS,
+  ExternalRouteResolution,
+  makeModeBands,
+} from '../dsp/earmaxLogic';
 import { buildDemoDeviceState, runMockLabScan } from '../data/virtualDevices';
 import { sleepAudioEngine } from '../audio/sleepAudioEngine';
 import { eqAudioEngine } from '../audio/eqAudioEngine';
@@ -59,6 +69,9 @@ interface EarshotStorageSnapshot {
   demoDeviceId: string;
   lowBatteryAlertPercent: number;
   customDeviceNames: Record<string, string>;
+  btd700ModeActive: boolean;
+  activeSenseEnabled: boolean;
+  selectedAudioRoute: AudioOutputRoute;
   tuning: TuningSettings;
   customPresets: EqPreset[];
   headsetPresetMemory: Record<string, string>;
@@ -71,14 +84,25 @@ interface EarshotStorageSnapshot {
   automations: AutomationRule[];
 }
 
-const STORAGE_KEY = 'earshot_web_state_v1';
+const STORAGE_KEY = 'earshot_web_state_v2';
+
+const DEFAULT_BAND_MODE_GAINS: Record<EqBandMode, number[]> = {
+  BAND_3: [0, 0, 0],
+  BAND_4: [0, 0, 0, 0],
+  BAND_5: [0, 0, 0, 0, 0],
+  BAND_7: [0, 0, 0, 0, 0, 0, 0],
+};
+
+const DEFAULT_PRESET = BUILT_IN_PRESETS[1] ?? BUILT_IN_PRESETS[0];
 
 const DEFAULT_TUNING: TuningSettings = {
   enabled: true,
   globalExperimental: false,
-  activePresetId: 'qc_ultra',
-  bands: BUILT_IN_PRESETS[1].bands,
-  preampDb: BUILT_IN_PRESETS[1].preampDb,
+  activePresetId: DEFAULT_PRESET.id,
+  bandMode: 'BAND_5',
+  bandModeGains: DEFAULT_BAND_MODE_GAINS,
+  bands: DEFAULT_PRESET.bands,
+  preampDb: DEFAULT_PRESET.preampDb,
   boostDb: 0,
   limiterEnabled: true,
 };
@@ -219,6 +243,12 @@ interface EarshotContextValue {
   toggleModeFavorite: (modeIndex: number) => void;
   saveModeConfig: (modeIndex: number, name: string, settings: NoiseSettings) => void;
   updateNoiseSettings: (patch: Partial<NoiseSettings>) => void;
+  btd700ModeActive: boolean;
+  setBtd700Mode: (enabled: boolean) => void;
+  setActiveSense: (enabled: boolean) => void;
+  selectedAudioRoute: AudioOutputRoute;
+  setSelectedAudioRoute: (route: AudioOutputRoute) => void;
+  externalOutput: ExternalRouteResolution;
   togglePlayback: () => void;
   stepTrack: (dir: 'next' | 'prev') => void;
   setVolume: (vol: number) => void;
@@ -243,6 +273,8 @@ interface EarshotContextValue {
   tuning: TuningSettings;
   setTuningEnabled: (enabled: boolean) => void;
   setGlobalExperimental: (enabled: boolean) => void;
+  setBandMode: (mode: EqBandMode) => void;
+  setBandModeGain: (bandIndex: number, gainDb: number) => void;
   allPresets: EqPreset[];
   customPresets: EqPreset[];
   selectPreset: (presetId: string) => void;
@@ -340,20 +372,52 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
   );
 
   const [demoModeEnabled, setDemoModeEnabled] = useState<boolean>(initial.demoModeEnabled ?? true);
-  const [demoDeviceId, setDemoDeviceId] = useState<string>(initial.demoDeviceId ?? 'qc_ultra');
+  const [demoDeviceId, setDemoDeviceId] = useState<string>(initial.demoDeviceId ?? 'qc_ultra_earbuds_2');
   const [lowBatteryAlertPercent, setLowBatteryAlertPercent] = useState<number>(initial.lowBatteryAlertPercent ?? 15);
   const [customDeviceNames, setCustomDeviceNames] = useState<Record<string, string>>(initial.customDeviceNames ?? {});
 
+  const [btd700ModeActive, setBtd700ModeActive] = useState<boolean>(initial.btd700ModeActive ?? false);
+  const [activeSenseEnabled, setActiveSenseEnabled] = useState<boolean>(initial.activeSenseEnabled ?? false);
+  const [selectedAudioRoute, setSelectedAudioRoute] = useState<AudioOutputRoute>(
+    initial.selectedAudioRoute ?? 'BLUETOOTH_A2DP',
+  );
+
   const [headphone, setHeadphone] = useState<HeadphoneState>(() => {
-    const base = buildDemoDeviceState(initial.demoDeviceId ?? 'qc_ultra');
+    const base = buildDemoDeviceState(initial.demoDeviceId ?? 'qc_ultra_earbuds_2');
     const customName = initial.customDeviceNames?.[base.deviceId];
-    if (customName) {
-      return { ...base, info: { ...base.info, customName } };
+    const withName = customName ? { ...base, info: { ...base.info, customName } } : base;
+    if (initial.btd700ModeActive) {
+      const updated = applyBtd700ModeTransition(
+        {
+          btd700ModeActive: false,
+          activeSenseEnabled: withName.activeSenseEnabled ?? false,
+          currentModeIndex: withName.currentModeIndex,
+          noise: withName.noise,
+        },
+        true,
+      );
+      return {
+        ...withName,
+        currentModeIndex: updated.currentModeIndex,
+        noise: updated.noise,
+        activeSenseEnabled: updated.activeSenseEnabled,
+      };
     }
-    return base;
+    return {
+      ...withName,
+      activeSenseEnabled: initial.activeSenseEnabled ?? withName.activeSenseEnabled ?? false,
+    };
   });
 
-  const [tuning, setTuning] = useState<TuningSettings>(initial.tuning ?? DEFAULT_TUNING);
+  const [tuning, setTuning] = useState<TuningSettings>(() => ({
+    ...DEFAULT_TUNING,
+    ...(initial.tuning ?? {}),
+    bandMode: initial.tuning?.bandMode ?? DEFAULT_TUNING.bandMode,
+    bandModeGains: {
+      ...DEFAULT_BAND_MODE_GAINS,
+      ...(initial.tuning?.bandModeGains ?? {}),
+    },
+  }));
   const [customPresets, setCustomPresets] = useState<EqPreset[]>(initial.customPresets ?? []);
   const [headsetPresetMemory, setHeadsetPresetMemory] = useState<Record<string, string>>(initial.headsetPresetMemory ?? {});
   const [eqPlaying, setEqPlaying] = useState(false);
@@ -437,13 +501,16 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
   useEffect(() => {
     try {
       const snap: EarshotStorageSnapshot = {
-        version: 1,
+        version: 2,
         appearance,
         themePreference,
         demoModeEnabled,
         demoDeviceId,
         lowBatteryAlertPercent,
         customDeviceNames,
+        btd700ModeActive,
+        activeSenseEnabled,
+        selectedAudioRoute,
         tuning,
         customPresets,
         headsetPresetMemory,
@@ -466,6 +533,9 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
     demoDeviceId,
     lowBatteryAlertPercent,
     customDeviceNames,
+    btd700ModeActive,
+    activeSenseEnabled,
+    selectedAudioRoute,
     tuning,
     customPresets,
     headsetPresetMemory,
@@ -677,18 +747,100 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [showToast],
   );
 
+  const externalOutput = useMemo(
+    () =>
+      detectExternalAudioRoute({
+        selectedRoute: selectedAudioRoute,
+        btd700ModeActive,
+        controlLinkActive: headphone.status === 'CONNECTED',
+      }),
+    [selectedAudioRoute, btd700ModeActive, headphone.status],
+  );
+
   const selectMode = useCallback((modeIndex: number) => {
     setHeadphone((hp) => {
       const mode = hp.modes.find((m) => m.index === modeIndex);
       if (!mode) return hp;
+      const updated = applyListeningModePolicy(
+        {
+          btd700ModeActive,
+          activeSenseEnabled: hp.activeSenseEnabled ?? false,
+          currentModeIndex: hp.currentModeIndex,
+          noise: hp.noise,
+        },
+        modeIndex,
+        mode.name,
+        mode.settings,
+      );
+      setBtd700ModeActive(updated.btd700ModeActive);
+      setActiveSenseEnabled(updated.activeSenseEnabled);
       return {
         ...hp,
-        currentModeIndex: modeIndex,
-        noise: mode.settings ? { ...mode.settings } : hp.noise,
+        currentModeIndex: updated.currentModeIndex,
+        noise: updated.noise,
+        activeSenseEnabled: updated.activeSenseEnabled,
         lastUpdatedMillis: Date.now(),
       };
     });
-  }, []);
+  }, [btd700ModeActive]);
+
+  const setBtd700Mode = useCallback(
+    (enabled: boolean) => {
+      setBtd700ModeActive(enabled);
+      if (enabled) {
+        setTuning((prev) => ({ ...prev, enabled: true }));
+        setCodecState((c) => ({ ...c, activeCodec: 'aptX Adaptive', sampleRateHz: 96000, bitsPerSample: 24, bitrateKbps: 420 }));
+      }
+      setHeadphone((hp) => {
+        const updated = applyBtd700ModeTransition(
+          {
+            btd700ModeActive: enabled,
+            activeSenseEnabled: hp.activeSenseEnabled ?? false,
+            currentModeIndex: hp.currentModeIndex,
+            noise: hp.noise,
+          },
+          enabled,
+        );
+        setActiveSenseEnabled(updated.activeSenseEnabled);
+        return {
+          ...hp,
+          currentModeIndex: updated.currentModeIndex,
+          noise: updated.noise,
+          activeSenseEnabled: updated.activeSenseEnabled,
+          lastUpdatedMillis: Date.now(),
+        };
+      });
+      pushTimeline(
+        headphone.info.customName,
+        enabled ? 'BTD 700 Mode engaged' : 'BTD 700 Mode released',
+        enabled ? 'USB lossless DSP unlocked · Quiet ANC locked to 10 · ActiveSense OFF' : 'Noise Cancelling slider unlocked',
+        'ok',
+      );
+      showToast(
+        enabled
+          ? 'BTD 700 Mode ON — Quiet ANC locked & ActiveSense OFF'
+          : 'BTD 700 Mode OFF — NC slider unlocked',
+      );
+    },
+    [headphone.info.customName, pushTimeline, showToast],
+  );
+
+  const setActiveSense = useCallback(
+    (enabled: boolean) => {
+      if (btd700ModeActive && enabled) {
+        showToast('ActiveSense stays OFF while BTD 700 Mode is active');
+        return;
+      }
+      setActiveSenseEnabled(enabled);
+      setHeadphone((hp) => ({
+        ...hp,
+        activeSenseEnabled: enabled,
+        lastUpdatedMillis: Date.now(),
+      }));
+      showToast(enabled ? 'ActiveSense ON' : 'ActiveSense OFF');
+    },
+    [btd700ModeActive, showToast],
+  );
 
   const toggleModeFavorite = useCallback(
     (modeIndex: number) => {
@@ -736,18 +888,25 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [showToast],
   );
 
-  const updateNoiseSettings = useCallback((patch: Partial<NoiseSettings>) => {
-    setHeadphone((hp) => {
-      if (!hp.noise) return hp;
-      const next: NoiseSettings = { ...hp.noise, ...patch };
-      return {
-        ...hp,
-        noise: next,
-        modes: hp.modes.map((m) => (m.index === hp.currentModeIndex ? { ...m, settings: next } : m)),
-        lastUpdatedMillis: Date.now(),
-      };
-    });
-  }, []);
+  const updateNoiseSettings = useCallback(
+    (patch: Partial<NoiseSettings>) => {
+      setHeadphone((hp) => {
+        if (!hp.noise) return hp;
+        const next: NoiseSettings = {
+          ...hp.noise,
+          ...patch,
+          ...(btd700ModeActive ? { cancellingLevel: 10, ancEnabled: true } : {}),
+        };
+        return {
+          ...hp,
+          noise: next,
+          modes: hp.modes.map((m) => (m.index === hp.currentModeIndex ? { ...m, settings: next } : m)),
+          lastUpdatedMillis: Date.now(),
+        };
+      });
+    },
+    [btd700ModeActive],
+  );
 
   const togglePlayback = useCallback(() => {
     setHeadphone((hp) => ({
@@ -936,6 +1095,39 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
     },
     [applyPresetById, headphone.deviceId],
   );
+
+  const setBandMode = useCallback((bandMode: EqBandMode) => {
+    setTuning((prev) => {
+      const specs = EQ_BAND_MODE_CONFIGS[bandMode].bands;
+      const existing = prev.bandModeGains[bandMode];
+      const gains = existing && existing.length === specs.length ? existing : specs.map(() => 0);
+      return {
+        ...prev,
+        activePresetId: null,
+        bandMode,
+        bandModeGains: { ...prev.bandModeGains, [bandMode]: gains },
+        bands: makeModeBands(bandMode, gains),
+      };
+    });
+  }, []);
+
+  const setBandModeGain = useCallback((bandIndex: number, gainDb: number) => {
+    setTuning((prev) => {
+      const mode = prev.bandMode;
+      const specs = EQ_BAND_MODE_CONFIGS[mode].bands;
+      const baseGains =
+        prev.bandModeGains[mode]?.length === specs.length
+          ? [...prev.bandModeGains[mode]]
+          : specs.map((_, i) => prev.bands[i]?.gainDb ?? 0);
+      baseGains[bandIndex] = Math.max(-15, Math.min(15, gainDb));
+      return {
+        ...prev,
+        activePresetId: null,
+        bandModeGains: { ...prev.bandModeGains, [mode]: baseGains },
+        bands: makeModeBands(mode, baseGains),
+      };
+    });
+  }, []);
 
   const updateGraphicBandGain = useCallback((index: number, gainDb: number) => {
     setTuning((prev) => {
@@ -1513,9 +1705,12 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setAppearance('field');
     setThemePreference('light');
     setDemoModeEnabled(true);
-    setDemoDeviceId('qc_ultra');
+    setDemoDeviceId('qc_ultra_earbuds_2');
+    setBtd700ModeActive(false);
+    setActiveSenseEnabled(false);
+    setSelectedAudioRoute('BLUETOOTH_A2DP');
     setCustomDeviceNames({});
-    setHeadphone(buildDemoDeviceState('qc_ultra'));
+    setHeadphone(buildDemoDeviceState('qc_ultra_earbuds_2'));
     setTuning(DEFAULT_TUNING);
     setCustomPresets([]);
     setSleepPlan(DEFAULT_SLEEP_PLAN);
@@ -1553,6 +1748,12 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
     toggleModeFavorite,
     saveModeConfig,
     updateNoiseSettings,
+    btd700ModeActive,
+    setBtd700Mode,
+    setActiveSense,
+    selectedAudioRoute,
+    setSelectedAudioRoute,
+    externalOutput,
     togglePlayback,
     stepTrack,
     setVolume,
@@ -1575,6 +1776,8 @@ export const EarshotProvider: React.FC<{ children: React.ReactNode }> = ({ child
     tuning,
     setTuningEnabled,
     setGlobalExperimental,
+    setBandMode,
+    setBandModeGain,
     allPresets,
     customPresets,
     selectPreset,

@@ -42,6 +42,7 @@ import dev.earshot.ui.LocalUiDependencies
 import dev.earshot.ui.common.EarshotPreview
 import dev.earshot.ui.common.LightDarkPreview
 import dev.earshot.ui.common.SectionCard
+import dev.earshot.ui.common.SwitchRow
 import dev.earshot.ui.common.VendorControlsCard
 import dev.earshot.ui.common.earshotViewModel
 import dev.earshot.ui.tools.DiagnosticsReport
@@ -52,7 +53,7 @@ import kotlinx.coroutines.launch
 fun HomeScreen(contentPadding: PaddingValues, onEditModes: () -> Unit) {
     val vm = earshotViewModel { HomeViewModel(it.headphones, it.messenger, it.earbudState) }
     val state by vm.state.collectAsStateWithLifecycle()
-    val softwareWindBlock by vm.softwareWindBlock.collectAsStateWithLifecycle()
+    val btd700Mode by vm.btd700Mode.collectAsStateWithLifecycle()
     val debugEntries by vm.debugEntries.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val messenger = LocalUiDependencies.current.messenger
@@ -73,8 +74,9 @@ fun HomeScreen(contentPadding: PaddingValues, onEditModes: () -> Unit) {
         onVolume = vm::setVolume,
         onCrusher = vm::setCrusherBass,
         onVendorControl = vm::setVendorControl,
-        softwareWindBlock = softwareWindBlock,
-        onSoftwareWindBlockChange = vm::setSoftwareWindBlock,
+        btd700Mode = btd700Mode,
+        onBtd700ModeChange = vm::setBtd700Mode,
+        onActiveSenseChange = vm::setActiveSense,
         debugEntries = debugEntries,
         onClearDebugLog = vm::clearDebugLog,
         onCopyDebugLog = {
@@ -132,8 +134,9 @@ fun HomeContent(
     onVolume: (Int) -> Unit = {},
     onCrusher: (active: Boolean?, intensity: Int?, mode: Int?) -> Unit = { _, _, _ -> },
     onVendorControl: (id: String, value: Int) -> Unit = { _, _ -> },
-    softwareWindBlock: Boolean? = null,
-    onSoftwareWindBlockChange: ((Boolean) -> Unit)? = null,
+    btd700Mode: Boolean? = null,
+    onBtd700ModeChange: ((Boolean) -> Unit)? = null,
+    onActiveSenseChange: ((Boolean) -> Unit)? = null,
     debugEntries: List<BtDebugLog.Entry> = emptyList(),
     onClearDebugLog: () -> Unit = {},
     onCopyDebugLog: () -> Unit = {},
@@ -176,8 +179,9 @@ fun HomeContent(
             onVolume = onVolume,
             onCrusher = onCrusher,
             onVendorControl = onVendorControl,
-            softwareWindBlock = softwareWindBlock,
-            onSoftwareWindBlockChange = onSoftwareWindBlockChange,
+            btd700Mode = btd700Mode,
+            onBtd700ModeChange = onBtd700ModeChange,
+            onActiveSenseChange = onActiveSenseChange,
         )
         BluetoothDebugLogCard(
             entries = debugEntries,
@@ -201,8 +205,9 @@ private fun ConnectedControls(
     onVolume: (Int) -> Unit,
     onCrusher: (active: Boolean?, intensity: Int?, mode: Int?) -> Unit,
     onVendorControl: (id: String, value: Int) -> Unit,
-    softwareWindBlock: Boolean?,
-    onSoftwareWindBlockChange: ((Boolean) -> Unit)?,
+    btd700Mode: Boolean?,
+    onBtd700ModeChange: ((Boolean) -> Unit)?,
+    onActiveSenseChange: ((Boolean) -> Unit)?,
 ) {
     val caps = state.capabilities
     caps.supportNote?.let { SupportNoteCard(it) }
@@ -257,6 +262,17 @@ private fun ConnectedControls(
             modifier = Modifier.padding(start = 4.dp, top = 2.dp),
         )
     }
+    if (buds && btd700Mode != null && onBtd700ModeChange != null) {
+        SectionCard(title = stringResource(R.string.home_btd700_title)) {
+            SwitchRow(
+                title = stringResource(R.string.home_btd700_mode),
+                subtitle = stringResource(R.string.home_btd700_subtitle),
+                checked = btd700Mode,
+                enabled = controlsEnabled,
+                onCheckedChange = onBtd700ModeChange,
+            )
+        }
+    }
     // Open earbuds have no noise cancelling at all; their immersive audio is a mode of its own.
     val showNoise = caps.noiseCancelling || (caps.spatialAudio && caps.formFactor != FormFactor.OPEN_EARBUDS)
     if (showNoise) SectionCard(title = stringResource(if (caps.noiseCancelling) R.string.home_noise_title else R.string.noise_immersive)) {
@@ -269,9 +285,10 @@ private fun ConnectedControls(
             onChange = onNoiseChange,
             compact = true,
             capabilities = caps,
-            softwareWindBlock = if (buds && !caps.windBlock) softwareWindBlock else null,
-            onSoftwareWindBlockChange = if (buds && !caps.windBlock) onSoftwareWindBlockChange else null,
-            softwareWindBlockEnabled = controlsEnabled,
+            activeSense = if (caps.activeSense) state.activeSenseEnabled else null,
+            onActiveSenseChange = if (caps.activeSense) onActiveSenseChange else null,
+            activeSenseEnabled = controlsEnabled && btd700Mode != true,
+            btd700Locked = buds && btd700Mode == true,
         )
         if (!adjustable) {
             Text(

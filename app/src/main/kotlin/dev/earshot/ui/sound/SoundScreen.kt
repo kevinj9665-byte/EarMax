@@ -57,11 +57,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.earshot.R
 import dev.earshot.core.AppSoundProfile
+import dev.earshot.core.AudioOutputRoute
 import dev.earshot.core.HeadphoneEq
 import dev.earshot.core.HeadphoneState
 import dev.earshot.core.TuningState
 import dev.earshot.core.fake.FakeAudioTuningRepository
 import dev.earshot.core.fake.FakeHeadphoneRepository
+import dev.earshot.dsp.EqBandMode
 import dev.earshot.dsp.EqPreset
 import dev.earshot.dsp.Headroom
 import dev.earshot.dsp.ParametricBand
@@ -112,6 +114,8 @@ fun SoundScreen(contentPadding: PaddingValues) {
             onImportAutoEq = vm::importAutoEq,
             onApplyPreset = vm::applyPreset,
             onDeletePreset = vm::deletePreset,
+            onBandMode = vm::setBandMode,
+            onBandModeGains = vm::setBandModeGains,
             onBands = vm::setBands,
             onPreamp = vm::setPreamp,
             onSavePreset = vm::savePreset,
@@ -132,6 +136,8 @@ data class SoundCallbacks(
     val onImportAutoEq: (text: String, name: String) -> Unit = { _, _ -> },
     val onApplyPreset: (String?) -> Unit = {},
     val onDeletePreset: (EqPreset) -> Unit = {},
+    val onBandMode: (EqBandMode) -> Unit = {},
+    val onBandModeGains: (EqBandMode, List<Double>) -> Unit = { _, _ -> },
     val onBands: (List<ParametricBand>) -> Unit = {},
     val onPreamp: (Double) -> Unit = {},
     val onSavePreset: (String) -> Unit = {},
@@ -251,11 +257,19 @@ private fun ProEqSection(state: TuningState, bands: List<ParametricBand>, curve:
             enabled = state.isAvailable && settings.enabled,
             onCheckedChange = callbacks.onUseGlobalSession,
         )
-        if (settings.windCutEnabled) {
-            InfoBanner(
-                stringResource(R.string.sound_wind_cut_active),
-                tone = BannerTone.INFO,
-                modifier = Modifier.padding(bottom = 8.dp),
+        if (state.isExternalOutputConnected) {
+            val routeRes = when (state.outputRoute) {
+                AudioOutputRoute.BTD700_LOSSLESS -> R.string.sound_route_btd700
+                AudioOutputRoute.USB_AUDIO -> R.string.sound_route_usb
+                AudioOutputRoute.BLUETOOTH_A2DP -> R.string.sound_route_bt
+                AudioOutputRoute.BOSE_CONTROL_LINK -> R.string.sound_route_bose_link
+                AudioOutputRoute.PHONE_SPEAKER -> R.string.sound_route_speaker
+            }
+            Text(
+                stringResource(routeRes),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 6.dp),
             )
         }
         if (state.warning != null) {
@@ -282,7 +296,17 @@ private fun ProEqSection(state: TuningState, bands: List<ParametricBand>, curve:
         )
         Spacer(Modifier.height(12.dp))
         when (mode) {
-            EditorMode.GRAPHIC -> GraphicEqEditor(bands = bands, preampDb = settings.preampDb, enabled = enabled, onBandsChange = callbacks.onBands)
+            EditorMode.GRAPHIC -> GraphicEqEditor(
+                bands = bands,
+                preampDb = settings.preampDb,
+                enabled = enabled,
+                bandMode = settings.bandMode,
+                bandModeGains = settings.bandModeGains,
+                activePresetId = settings.activePresetId,
+                onBandModeChange = callbacks.onBandMode,
+                onBandModeGainsChange = callbacks.onBandModeGains,
+                onBandsChange = callbacks.onBands,
+            )
             EditorMode.PARAMETRIC -> ParametricEqEditor(bands = bands, enabled = enabled, onBandsChange = callbacks.onBands)
         }
         Spacer(Modifier.height(8.dp))

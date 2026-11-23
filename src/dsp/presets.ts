@@ -87,6 +87,15 @@ export function exportAutoEqText(preset: EqPreset): string {
   return lines.join('\n');
 }
 
+const QC_ULTRA_EARBUDS_2_AUTOEQ_TEXT = `Preamp: -3.2 dB
+Filter 1: ON LSC Fc 80 Hz Gain -2.5 dB Q 0.70
+Filter 2: ON PK Fc 135 Hz Gain -3.1 dB Q 1.15
+Filter 3: ON PK Fc 320 Hz Gain 1.8 dB Q 1.45
+Filter 4: ON PK Fc 1850 Hz Gain 2.9 dB Q 2.10
+Filter 5: ON PK Fc 4300 Hz Gain -2.4 dB Q 3.10
+Filter 6: ON PK Fc 8500 Hz Gain 3.2 dB Q 2.60
+Filter 7: ON HSC Fc 12500 Hz Gain 2.0 dB Q 0.70`;
+
 const QC_ULTRA_AUTOEQ_TEXT = `Preamp: -2.8 dB
 Filter 1: ON LSC Fc 105 Hz Gain -3.0 dB Q 0.70
 Filter 2: ON PK Fc 5032 Hz Gain 2.8 dB Q 3.69
@@ -116,9 +125,16 @@ export const BUILT_IN_PRESETS: EqPreset[] = [
     description: "No change — the headphones' own sound.",
   },
   parseAutoEqText(
+    QC_ULTRA_EARBUDS_2_AUTOEQ_TEXT,
+    'qc_ultra_earbuds_2',
+    'QC Ultra Earbuds (2nd Gen)',
+    'Balanced Harman IE target curve for Bose QuietComfort Ultra Earbuds (2nd Gen) — tightens mid-bass bloom and opens 1.8 kHz–12 kHz presence.',
+    true,
+  ),
+  parseAutoEqText(
     QC_ULTRA_AUTOEQ_TEXT,
     'qc_ultra',
-    'Tuned for QC Ultra',
+    'Tuned for QC Ultra HP',
     'Correction toward the Harman over-ear target for the Bose QuietComfort Ultra Headphones (AutoEq, Rtings B&K 5128).',
     true,
   ),

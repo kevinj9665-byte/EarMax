@@ -9,6 +9,7 @@ import dev.earshot.core.HeadphoneRepository
 import dev.earshot.core.HeadphoneState
 import dev.earshot.core.TuningState
 import dev.earshot.dsp.AutoEqParser
+import dev.earshot.dsp.EqBandMode
 import dev.earshot.dsp.EqPreset
 import dev.earshot.dsp.Headroom
 import dev.earshot.dsp.ParametricBand
@@ -77,13 +78,13 @@ class SoundViewModel(
     val curve: StateFlow<EqCurveData> =
         combine(
             bands,
-            tuning.state.map { it.settings.preampDb to it.settings.windCutEnabled }.distinctUntilChanged(),
-        ) { b, (preamp, windCut) -> Triple(b, preamp, windCut) }
-            .mapLatest { (b, preamp, windCut) -> withContext(curveDispatcher) { EqCurveData(b, preamp, windCut) } }
+            tuning.state.map { it.settings.preampDb }.distinctUntilChanged(),
+        ) { b, preamp -> b to preamp }
+            .mapLatest { (b, preamp) -> withContext(curveDispatcher) { EqCurveData(b, preamp) } }
             .stateIn(
                 viewModelScope,
                 SharingStarted.WhileSubscribed(5_000),
-                EqCurveData(bands.value, tuning.state.value.settings.preampDb, tuning.state.value.settings.windCutEnabled),
+                EqCurveData(bands.value, tuning.state.value.settings.preampDb),
             )
 
     init {
@@ -129,6 +130,17 @@ class SoundViewModel(
         tuning.applyPreset(id)
         headsetEq?.rememberPick(id)
     }
+    fun setBandMode(mode: EqBandMode) = launchCatching {
+        bandsDraft.value = null
+        tuning.setBandMode(mode)
+    }
+
+    fun setBandModeGains(mode: EqBandMode, gainsDb: List<Double>) = launchCatching {
+        bandsDraft.value = null
+        tuning.setBandModeGains(mode, gainsDb)
+        headsetEq?.rememberPick(null)
+    }
+
     fun setPreamp(db: Double) = launchCatching { tuning.setPreamp(db) }
     fun setBoost(db: Double) = launchCatching { tuning.setBoost(db) }
     fun setLimiter(enabled: Boolean) = launchCatching { tuning.setLimiter(enabled) }

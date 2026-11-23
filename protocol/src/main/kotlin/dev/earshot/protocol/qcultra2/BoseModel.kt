@@ -145,6 +145,8 @@ enum class BoseModel(
      * than [verified], which bosectl's captures also earn. Owners' reports add models here.
      */
     val tested: Boolean = false,
+    /** Whether the model exposes Bose ActiveSense (`[1.29] AutoAwareMode`). */
+    val hasActiveSense: Boolean = false,
 ) : ModeSlotPlan {
     QC_ULTRA_2(
         setOf(QcUltra2.PRODUCT_ID), "QuietComfort Ultra Headphones (2nd Gen)", "wolverine",
@@ -154,7 +156,7 @@ enum class BoseModel(
         presetSlots = QcUltra2.PRESET_MODE_SLOTS, editableSlots = QcUltra2.EDITABLE_MODE_SLOTS,
         slotCount = QcUltra2.MODE_SLOT_COUNT, knownAbsent = emptySet(), verified = true,
         // A real pair, firmware 10.12.12 (2026-10-16).
-        tested = true,
+        tested = true, hasActiveSense = true,
     ),
 
     /**
@@ -244,7 +246,7 @@ enum class BoseModel(
         hasNoiseCancelling = true, hasWindBlock = false, directCnc = false, presetNames = ULTRA_PRESETS,
         presetSlots = QcUltra2.PRESET_MODE_SLOTS, editableSlots = QcUltra2.EDITABLE_MODE_SLOTS,
         slotCount = QcUltra2.MODE_SLOT_COUNT, knownAbsent = emptySet(), verified = true,
-        tested = true,
+        tested = true, hasActiveSense = true,
     ),
 
     /**

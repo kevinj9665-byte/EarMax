@@ -37,4 +37,19 @@ class PresetCodecTest {
         assertNull(PresetCodec.decodePresetsOrNull(null))
         assertEquals(emptyList(), PresetCodec.decodeAppProfilesOrNull("[]"))
     }
+
+    @Test
+    fun `bandMode and per-mode gains round-trip cleanly`() {
+        val s = TuningSettings(
+            enabled = true,
+            bandMode = EqBandMode.BAND_7,
+            bandModeGains = mapOf(
+                EqBandMode.BAND_3 to listOf(2.0, -1.0, 3.0),
+                EqBandMode.BAND_7 to listOf(1.5, 0.5, -1.0, 0.0, 2.0, 1.5, 2.5),
+            ),
+            boostDb = 4.5,
+        )
+        assertEquals(s, PresetCodec.decodeSettings(PresetCodec.encodeSettings(s)))
+        assertEquals(listOf(3, 4, 5, 7), EqBandMode.entries.map { it.bandCount })
+    }
 }

@@ -80,6 +80,8 @@ interface HeadphoneProtocol {
     suspend fun setAutoOff(c: BmapRequester, current: HeadphoneState, minutes: Int): HeadphoneState = notSupported()
     suspend fun setVolume(c: BmapRequester, current: HeadphoneState, level: Int): HeadphoneState = notSupported()
     suspend fun transport(c: BmapRequester, current: HeadphoneState, control: TransportControl): HeadphoneState = notSupported()
+    /** Bose ActiveSense (`[1.29]` AutoAwareMode). */
+    suspend fun setActiveSense(c: BmapRequester, current: HeadphoneState, enabled: Boolean): HeadphoneState = notSupported()
     /** Lab console; returns text, never touches state. */
     suspend fun printConsole(c: BmapRequester, command: String): String = notSupported()
 

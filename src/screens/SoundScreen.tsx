@@ -13,8 +13,15 @@ import {
 import { useEarshot } from '../context/EarshotContext';
 import { EarshotCard, FieldSlider, FieldSwitch, InfoBanner, LegendHeading } from '../components/EarshotPrimitives';
 import { sampleEqResponse } from '../dsp/biquad';
-import { exportAutoEqText, GRAPHIC_FREQUENCIES_HZ } from '../dsp/presets';
-import { FilterType, ParametricBand } from '../types/earshot';
+import { exportAutoEqText } from '../dsp/presets';
+import {
+  EQ_BAND_MODE_CONFIGS,
+  EQ_BAND_MODE_ORDER,
+  formatBandSliderLabel,
+  planTwoStageBoost,
+  sampleGainsForMode,
+} from '../dsp/earmaxLogic';
+import { AudioOutputRoute, FilterType, ParametricBand } from '../types/earshot';
 
 const FREQ_TICKS = [
   { hz: 50, label: '50' },
@@ -35,19 +42,20 @@ function dbToY(db: number, height: number): number {
   return ((15 - clamped) / 30) * height;
 }
 
-function formatFreqLabel(hz: number): string {
-  return hz >= 1000 ? `${hz / 1000}k` : String(Math.round(hz));
-}
-
 export const SoundScreen: React.FC = () => {
   const {
     headphone,
     tuning,
     setTuningEnabled,
     setGlobalExperimental,
+    setBandMode,
+    setBandModeGain,
+    selectedAudioRoute,
+    setSelectedAudioRoute,
+    externalOutput,
+    btd700ModeActive,
     allPresets,
     selectPreset,
-    updateGraphicBandGain,
     updateParametricBands,
     setEqPreamp,
     setEqBoost,
@@ -104,28 +112,19 @@ export const SoundScreen: React.FC = () => {
     return { w, h, padY, innerH, zeroY, pathD, areaD, bandDots };
   }, [tuning.bands, tuning.preampDb]);
 
-  // Graphic bands aligned to the 10 ISO frequencies (or mapped to nearest when a parametric preset is loaded)
-  const graphicGains = useMemo(() => {
-    const isExactGraphic =
-      tuning.bands.length === 10 &&
-      GRAPHIC_FREQUENCIES_HZ.every((f, i) => Math.abs(tuning.bands[i].frequencyHz - f) < 1);
-    if (isExactGraphic) {
-      return tuning.bands.map((b) => Math.round(b.gainDb));
+  const activeModeConfig = EQ_BAND_MODE_CONFIGS[tuning.bandMode];
+  const activeModeGains = useMemo(() => {
+    const saved = tuning.bandModeGains[tuning.bandMode];
+    if (!tuning.activePresetId && saved && saved.length === activeModeConfig.bands.length) {
+      return saved;
     }
-    const pts = sampleEqResponse(tuning.bands, 0, 120, 20, 20000);
-    return GRAPHIC_FREQUENCIES_HZ.map((hz) => {
-      let nearest = pts[0];
-      let bestDist = Infinity;
-      for (const p of pts) {
-        const d = Math.abs(Math.log10(p.frequencyHz) - Math.log10(hz));
-        if (d < bestDist) {
-          bestDist = d;
-          nearest = p;
-        }
-      }
-      return Math.max(-15, Math.min(15, Math.round(nearest.gainDb)));
-    });
-  }, [tuning.bands]);
+    return sampleGainsForMode(tuning.bands, tuning.bandMode);
+  }, [tuning.bandMode, tuning.bandModeGains, tuning.activePresetId, tuning.bands, activeModeConfig.bands.length]);
+
+  const boostPlan = useMemo(
+    () => planTwoStageBoost(tuning.boostDb, tuning.limiterEnabled),
+    [tuning.boostDb, tuning.limiterEnabled],
+  );
 
   const handleExportAutoEq = async () => {
     const activePreset = allPresets.find((p) => p.id === tuning.activePresetId) ?? {
@@ -206,9 +205,13 @@ export const SoundScreen: React.FC = () => {
             />
           </div>
 
-          {!isConnected && (
+          {externalOutput.isExternalOutputActive ? (
+            <InfoBanner tone="neutral">
+              <strong>{externalOutput.label}:</strong> {externalOutput.unlockReason}
+            </InfoBanner>
+          ) : (
             <InfoBanner tone="warn">
-              No Bluetooth headphones connected — the EQ is paused so it doesn&apos;t colour the device speaker. You can still test with the live EQ audition below.
+              Audio is routing through the phone speaker — Pro EQ is paused until USB-C Audio (BTD 700), Bluetooth, or the Bose control link connects.
             </InfoBanner>
           )}
 
@@ -379,39 +382,63 @@ export const SoundScreen: React.FC = () => {
             ))}
           </div>
 
-          {/* Graphic 10-band Sliders OR Parametric Band List */}
+          {/* Graphic 3/4/5/7-band Mode Selector & Labeled Sliders OR Parametric Band List */}
           {editorMode === 'graphic' ? (
-            <div className="grid grid-cols-10 gap-1 sm:gap-2 pt-2">
-              {GRAPHIC_FREQUENCIES_HZ.map((hz, idx) => {
-                const gain = graphicGains[idx] ?? 0;
-                return (
-                  <div key={hz} className="flex flex-col items-center gap-2">
-                    <span className="text-[11px] font-mono-tabular text-[var(--earshot-ink)]">
-                      {gain > 0 ? `+${gain}` : gain}
-                    </span>
-                    <div className="h-36 flex items-center justify-center">
-                      <input
-                        type="range"
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-semibold text-[var(--earshot-ink)]">{activeModeConfig.title}</div>
+                  <div className="text-xs text-[var(--earshot-muted)]">{activeModeConfig.subtitle}</div>
+                </div>
+                <div className="grid grid-cols-4 border border-[var(--earshot-hairline)] rounded-[var(--earshot-radius-sm)] overflow-hidden">
+                  {EQ_BAND_MODE_ORDER.map((mode) => {
+                    const cfg = EQ_BAND_MODE_CONFIGS[mode];
+                    const selected = tuning.bandMode === mode;
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setBandMode(mode)}
+                        className={`px-3 py-1.5 text-xs font-display font-bold tracking-wider uppercase cursor-pointer transition-colors ${
+                          selected
+                            ? 'bg-[var(--earshot-control)] text-[var(--earshot-on-control)]'
+                            : 'bg-[var(--earshot-surface-low)] text-[var(--earshot-ink)] hover:bg-[var(--earshot-surface-high)]'
+                        }`}
+                      >
+                        {cfg.shortLabel}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="space-y-3 pt-1">
+                {activeModeConfig.bands.map((spec, idx) => {
+                  const gain = activeModeGains[idx] ?? 0;
+                  const label = formatBandSliderLabel(spec);
+                  return (
+                    <div
+                      key={spec.id}
+                      className="p-3 rounded-[var(--earshot-radius-sm)] bg-[var(--earshot-surface-low)] border border-[var(--earshot-hairline)] space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between gap-2 text-xs sm:text-sm">
+                        <span className="font-medium text-[var(--earshot-ink)]">{label}</span>
+                        <span className="font-mono-tabular font-semibold text-[var(--earshot-ink)] shrink-0">
+                          {gain > 0 ? `+${gain.toFixed(1)}` : gain.toFixed(1)} dB
+                        </span>
+                      </div>
+                      <FieldSlider
                         min={-15}
                         max={15}
-                        step={1}
+                        step={0.5}
                         value={gain}
-                        aria-label={`${formatFreqLabel(hz)} Hz gain`}
-                        onChange={(e) => updateGraphicBandGain(idx, parseFloat(e.target.value))}
-                        className="earshot-slider w-32 -rotate-90 origin-center"
-                        style={{
-                          background: 'var(--earshot-track)',
-                          height: '5px',
-                          borderRadius: '3px',
-                        }}
+                        onChange={(v) => setBandModeGain(idx, v)}
+                        ariaLabel={label}
                       />
                     </div>
-                    <span className="text-[11px] font-mono-tabular text-[var(--earshot-muted)]">
-                      {formatFreqLabel(hz)}
-                    </span>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
           ) : (
             <div className="space-y-2.5">
@@ -585,6 +612,10 @@ export const SoundScreen: React.FC = () => {
                 onChange={setEqBoost}
                 ariaLabel="Volume boost"
               />
+              <div className="text-[11px] font-mono-tabular text-[var(--earshot-muted)]">
+                Stage 1: Sub-Bass (&lt;55 Hz) trim {boostPlan.subBassPreGainDb.toFixed(1)} dB · Stage 2: Limiter{' '}
+                {boostPlan.limiter.enabled ? `${boostPlan.limiter.thresholdDb} dBFS (${boostPlan.limiter.ratio}:1)` : 'Bypassed'}
+              </div>
               {tuning.boostDb > 6 && (
                 <div className="flex items-start gap-2 text-xs text-[var(--earshot-warn-ink)] bg-[var(--earshot-warn-bg)] p-2 rounded-[var(--earshot-radius-sm)]">
                   <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -595,10 +626,42 @@ export const SoundScreen: React.FC = () => {
 
             <div className="flex items-center justify-between pt-2 border-t border-dashed border-[var(--earshot-hairline)]">
               <div>
-                <div className="text-sm font-medium">Output limiter</div>
-                <div className="text-xs text-[var(--earshot-muted)]">Prevents digital clipping on heavy boosts</div>
+                <div className="text-sm font-medium">Output limiter (-0.5 dBFS · 10:1)</div>
+                <div className="text-xs text-[var(--earshot-muted)]">Two-stage protection prevents bass clip &amp; distortion</div>
               </div>
               <FieldSwitch checked={tuning.limiterEnabled} onChange={setEqLimiter} label="Output limiter" />
+            </div>
+
+            <div className="space-y-1.5 pt-2 border-t border-dashed border-[var(--earshot-hairline)]">
+              <div className="text-xs font-mono-tabular uppercase tracking-wider text-[var(--earshot-muted)]">
+                Audio Output Route
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {(
+                  [
+                    { route: 'USB_AUDIO', label: 'USB-C (BTD 700)' },
+                    { route: 'BLUETOOTH_A2DP', label: 'Bluetooth' },
+                    { route: 'PHONE_SPEAKER', label: 'Speaker' },
+                  ] as { route: AudioOutputRoute; label: string }[]
+                ).map((item) => {
+                  const active = (btd700ModeActive ? 'USB_AUDIO' : selectedAudioRoute) === item.route;
+                  return (
+                    <button
+                      key={item.route}
+                      type="button"
+                      disabled={btd700ModeActive && item.route !== 'USB_AUDIO'}
+                      onClick={() => setSelectedAudioRoute(item.route)}
+                      className={`px-2 py-1.5 text-[11px] font-medium rounded-[var(--earshot-radius-sm)] border cursor-pointer disabled:opacity-45 ${
+                        active
+                          ? 'bg-[var(--earshot-control)] text-[var(--earshot-on-control)] border-transparent'
+                          : 'bg-[var(--earshot-surface-low)] border-[var(--earshot-hairline)]'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </EarshotCard>
 

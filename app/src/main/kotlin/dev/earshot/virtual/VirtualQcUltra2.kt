@@ -165,6 +165,9 @@ class VirtualQcUltra2(
     /** `[1.37]` LeAudioControl; scan `01` = on. */
     var leAudioEnabled = true
         private set
+    /** `[1.29]` AutoAwareMode (Bose ActiveSense). */
+    var autoAwareMode = false
+        private set
 
     // ── AudioManagement [5.x] ────────────────────────────────────────────────────────────
     /** `[5.4]` scan `01 ffff`: playing, position unknown. */
@@ -475,6 +478,7 @@ class VirtualQcUltra2(
         QcUltra2.AUTO_ANSWER -> status(a, byteArrayOf(if (autoAnswer) 1 else 0))
         QcUltra2.DISABLE_CAPTOUCH -> status(a, byteArrayOf(if (touchEnabled) 1 else 0))
         QcUltra2.LE_AUDIO_CONTROL -> status(a, byteArrayOf(if (leAudioEnabled) 1 else 0))
+        QcUltra2.AUTO_AWARE_MODE -> status(a, byteArrayOf(if (autoAwareMode) 1 else 0))
 
         // Status [2.x]
         FunctionAddress(2, 0) -> text(a, "1.1.0")
@@ -633,6 +637,7 @@ class VirtualQcUltra2(
         }
         QcUltra2.AUTO_PLAY_PAUSE -> if (p.isEmpty()) error(a, BmapError.LENGTH) else { autoPlayPause = p[0] != 0.toByte(); get(a, BmapPacket.EMPTY) }
         QcUltra2.AUTO_ANSWER -> if (p.isEmpty()) error(a, BmapError.LENGTH) else { autoAnswer = p[0] != 0.toByte(); get(a, BmapPacket.EMPTY) }
+        QcUltra2.AUTO_AWARE_MODE -> if (p.isEmpty()) error(a, BmapError.LENGTH) else { autoAwareMode = p[0] != 0.toByte(); get(a, BmapPacket.EMPTY) }
         QcUltra2.DISABLE_CAPTOUCH -> if (p.isEmpty()) error(a, BmapError.LENGTH) else { touchEnabled = p[0] != 0.toByte(); get(a, BmapPacket.EMPTY) }
         // [1.4] [m] or two bytes little-endian (Bose SettingsStandbyTimerSetGetPacket); the reply is the GET form.
         QcUltra2.STANDBY_TIMER -> when (p.size) {
@@ -941,7 +946,7 @@ class VirtualQcUltra2(
         val KNOWN_FUNCTIONS: Set<FunctionAddress> = buildSet {
             fun fns(block: Int, vararg functions: Int) = functions.forEach { add(FunctionAddress(block, it)) }
             fns(0, 0, 1, 2, 3, 5, 6, 7, 12, 15, 17, 23)
-            fns(1, 0, 1, 2, 3, 5, 7, 9, 10, 11, 12, 24, 27, 34, 37)
+            fns(1, 0, 1, 2, 3, 5, 7, 9, 10, 11, 12, 24, 27, 29, 34, 37)
             fns(2, 0, 1, 2, 5, 16, 21)
             fns(3, 0, 1, 4, 6, 7, 15, 16)
             fns(4, 0, 1, 4, 5, 6, 8, 9, 12, 14, 18, 19)

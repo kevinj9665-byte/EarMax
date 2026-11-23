@@ -160,6 +160,7 @@ export interface HeadphoneCapabilities {
   hasLeAudio: boolean;
   hasLatency: boolean;
   hasStandbyTimer: boolean;
+  activeSense: boolean;
 }
 
 export interface PairingRequest {
@@ -202,6 +203,7 @@ export interface HeadphoneState {
   playbackState: PlaybackState;
   livePushEnabled: boolean;
   capabilities: HeadphoneCapabilities;
+  activeSenseEnabled: boolean | null;
   crusher: CrusherBass | null;
   pairing: PairingRequest | null;
   autoOffMinutes: number | null;
@@ -211,6 +213,25 @@ export interface HeadphoneState {
 
 // ---- DSP / EQ Models ----
 export type FilterType = 'PEAK' | 'LOW_SHELF' | 'HIGH_SHELF';
+
+export type EqBandMode = 'BAND_3' | 'BAND_4' | 'BAND_5' | 'BAND_7';
+
+export type AudioOutputRoute =
+  | 'USB_AUDIO'
+  | 'BTD700_LOSSLESS'
+  | 'BLUETOOTH_A2DP'
+  | 'BOSE_CONTROL_LINK'
+  | 'PHONE_SPEAKER';
+
+export interface EqBandSpec {
+  id: string;
+  title: string;
+  frequencyLabel: string;
+  role: string;
+  frequencyHz: number;
+  q: number;
+  type: FilterType;
+}
 
 export interface ParametricBand {
   id: string;
@@ -234,6 +255,8 @@ export interface TuningSettings {
   enabled: boolean;
   globalExperimental: boolean;
   activePresetId: string | null;
+  bandMode: EqBandMode;
+  bandModeGains: Record<EqBandMode, number[]>;
   bands: ParametricBand[];
   preampDb: number;
   boostDb: number; // 0..12
